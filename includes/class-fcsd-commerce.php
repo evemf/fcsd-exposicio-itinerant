@@ -18,7 +18,7 @@ class FCSD_Commerce {
 		/* ---- Tipo de producto y metadatos ---- */
 		add_filter( 'product_type_selector',                 [ $this, 'register_product_type_in_selector' ] );
 		add_filter( 'woocommerce_product_class',             [ $this, 'map_product_type_class' ], 10, 2 );
-		add_filter( 'woocommerce_product_data_tabs',         [ $this, 'add_product_data_tab' ] );
+		add_filter( 'woocommerce_product_data_tabs', [ $this, 'add_product_data_tab' ], PHP_INT_MAX );
 		add_action( 'woocommerce_product_data_panels',       [ $this, 'render_product_data_panel' ] );
 		add_action( 'woocommerce_admin_process_product_object', [ $this, 'save_meta_and_lock_stock' ] );
 		add_action( 'woocommerce_process_product_meta',      [ $this, 'save_meta_legacy' ] );
@@ -27,7 +27,9 @@ class FCSD_Commerce {
 		add_action( 'admin_init', [ $this, 'force_request_product_type_early' ], 0 );
 
 		/* ---- Forzados de tipo (lectura + guardar + quick edit) ---- */
-		add_filter( 'woocommerce_product_type_query',        [ $this, 'filter_product_type_query' ], PHP_INT_MAX, 2 ); // << clave
+		// Soportamos ambos filtros por compatibilidad con distintas versiones.
+		add_filter( 'woocommerce_product_type_query',        [ $this, 'filter_product_type_query' ], PHP_INT_MAX, 2 );
+		add_filter( 'woocommerce_get_product_type',          [ $this, 'filter_product_type_query' ], PHP_INT_MAX, 2 );
 		add_action( 'load-post.php',                         [ $this, 'maybe_fix_type_on_editor_load' ] );
 		add_action( 'woocommerce_after_product_object_save', [ $this, 'force_type_after_product_object_save' ], PHP_INT_MAX, 2 );
 		add_action( 'save_post_product',                     [ $this, 'force_type_on_save_post' ],            PHP_INT_MAX, 3 );
@@ -43,6 +45,9 @@ class FCSD_Commerce {
 		add_filter( 'woocommerce_add_to_cart_validation', [ $this, 'enforce_single_item_cart_for_unique' ], 0, 6 );
 		add_action( 'init',                             [ $this, 'maybe_preemptively_flush_cart' ], 1 );
 		add_action( 'woocommerce_check_cart_items',     [ $this, 'enforce_only_unique_in_cart' ], 0 );
+
+		/* ---- Red de seguridad de precio en carrito ---- */
+		add_action( 'woocommerce_before_calculate_totals', [ $this, 'ensure_unique_product_price_in_cart' ], 20 );
 
 		/* ---- Emails extra ---- */
 		foreach ( [
@@ -69,6 +74,12 @@ class FCSD_Commerce {
 
 		/* ---- Evita “stock retenido” en checkout para obra_unica ---- */
 		add_filter( 'pre_option_woocommerce_hold_stock_minutes', [ $this, 'disable_hold_stock_for_unique_checkout_only' ] );
+
+		/* ---- Sincroniza estado de stock tras compra (para ocultar botón Pagar) ---- */
+		add_action( 'woocommerce_reduce_order_stock',           [ $this, 'sync_unique_stock_after_reduction' ], 20, 1 );
+		add_action( 'woocommerce_payment_complete',             [ $this, 'sync_unique_stock_on_paid' ], 20, 1 );
+		add_action( 'woocommerce_order_status_processing',      [ $this, 'sync_unique_stock_on_paid' ], 20, 1 );
+		add_action( 'woocommerce_order_status_completed',       [ $this, 'sync_unique_stock_on_paid' ], 20, 1 );
 	}
 
 	/* ========= Tipo de producto y metadatos ========= */
@@ -84,14 +95,33 @@ class FCSD_Commerce {
 	}
 
 	public function add_product_data_tab( $tabs ) {
+		// Asegura que exista la pestaña "General"
+		if ( ! isset( $tabs['general'] ) ) {
+			$tabs['general'] = [
+				'label'    => __( 'General', 'woocommerce' ),
+				'target'   => 'general_product_data',
+				'class'    => [ 'general_options' ],
+				'priority' => 10,
+			];
+		}
+		// Muestra "General" también para obra_unica
+		$tabs['general']['class'] = isset( $tabs['general']['class'] ) ? (array) $tabs['general']['class'] : [];
+		$tabs['general']['class'][] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
+
+		// Asegura visibilidad de Inventario
+		if ( isset( $tabs['inventory'] ) ) {
+			$tabs['inventory']['class'] = isset( $tabs['inventory']['class'] ) ? (array) $tabs['inventory']['class'] : [];
+			$tabs['inventory']['class'][] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
+		}
+
+		// Nuestra pestaña
 		$tabs['fcsd_obra_unica'] = [
 			'label'    => __( "Obra d’art única", 'fcsd-exposicio' ),
 			'target'   => 'fcsd_obra_unica_data',
 			'class'    => [ 'show_if_' . FCSD_Core::PRODUCT_TYPE ],
 			'priority' => 21,
 		];
-		if ( isset( $tabs['general'] ) )   $tabs['general']['class'][]   = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
-		if ( isset( $tabs['inventory'] ) ) $tabs['inventory']['class'][] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
+
 		return $tabs;
 	}
 
@@ -142,28 +172,46 @@ class FCSD_Commerce {
 		if ( isset( $_POST[ FCSD_Core::META_ANY ] ) )     $product->update_meta_data( FCSD_Core::META_ANY,     intval( $_POST[ FCSD_Core::META_ANY ] ) );
 		if ( isset( $_POST[ FCSD_Core::META_MESURES ] ) ) $product->update_meta_data( FCSD_Core::META_MESURES, sanitize_text_field( wp_unslash( $_POST[ FCSD_Core::META_MESURES ] ) ) );
 
+		if ( isset($_POST['_regular_price']) ) {
+			$product->set_regular_price( wc_clean( wp_unslash( $_POST['_regular_price'] ) ) );
+		}
+		if ( isset($_POST['_sale_price']) ) {
+			$product->set_sale_price( wc_clean( wp_unslash( $_POST['_sale_price'] ) ) );
+		}
+		// Precio efectivo
+		$effective = $product->get_sale_price() !== '' ? $product->get_sale_price() : $product->get_regular_price();
+		if ( $effective !== '' ) {
+			$product->set_price( $effective );
+		}
+		// --- Forzar guardado de precio (algunos temas no lo persisten en tipos custom) ---
+		if ( isset($_POST['_regular_price']) ) {
+			$regular = wc_clean( wp_unslash( $_POST['_regular_price'] ) );
+			$product->set_regular_price( $regular );
+		}
+		if ( isset($_POST['_sale_price']) ) {
+			$sale = wc_clean( wp_unslash( $_POST['_sale_price'] ) );
+			$product->set_sale_price( $sale );
+		}
+		$effective = $product->get_sale_price() !== '' ? $product->get_sale_price() : $product->get_regular_price();
+		if ( $effective !== '' ) {
+			$product->set_price( $effective );
+		}
+
 		// Config base del tipo único
 		$product->set_manage_stock( true );
 		$product->set_backorders( 'no' );
 		$product->set_sold_individually( true );
 		$product->set_catalog_visibility( 'hidden' );
 
-		// ——— CLAVE: respetar 0 cuando el usuario lo guarda ———
-		// Woo no envía _stock_status cuando manage_stock = true, así que tomamos la cantidad del POST.
+		// Respetar 0 cuando el usuario lo guarda (Woo no envía _stock_status con manage_stock = true)
 		$posted_qty = isset($_POST['_stock']) ? wc_stock_amount( wp_unslash( $_POST['_stock'] ) ) : null;
-
-		if ( $posted_qty !== null ) {
-			$qty = (int) $posted_qty;
-		} else {
-			$qty = (int) $product->get_stock_quantity();
-		}
+		$qty = $posted_qty !== null ? (int) $posted_qty : (int) $product->get_stock_quantity();
 
 		if ( $qty <= 0 ) {
 			$product->set_stock_quantity( 0 );
 			$product->set_stock_status( 'outofstock' );
 		} else {
-			// Para obra única, si hay stock siempre es 1.
-			$product->set_stock_quantity( 1 );
+			$product->set_stock_quantity( 1 ); // obra única
 			$product->set_stock_status( 'instock' );
 		}
 
@@ -171,7 +219,6 @@ class FCSD_Commerce {
 		wp_set_object_terms( $product->get_id(), FCSD_Core::PRODUCT_TYPE, 'product_type', false );
 		update_post_meta( $product->get_id(), '_product_type', FCSD_Core::PRODUCT_TYPE );
 	}
-
 
 	public function save_meta_legacy( $post_id ) {
 		// Guardado clásico: sólo meta; el tipo lo forzamos aparte.
@@ -265,13 +312,26 @@ class FCSD_Commerce {
 	public function admin_js_show_price_for_obra_unica() {
 		$screen = function_exists('get_current_screen') ? get_current_screen() : null;
 		if ( ! $screen || $screen->id !== 'product' ) return; ?>
+		<style>
+			.post-type-product .show_if_obra_unica { display:block !important; }
+		</style>
 		<script>
 		jQuery(function($){
-			function fcsd_apply(){
-				$('.options_group.pricing, ._regular_price_field, ._sale_price_field').addClass('show_if_obra_unica');
+			function fcsd_show_price_fields(){
+				var $wrap = $('#woocommerce-product-data');
+
+				// Mostrar pestaña/panel General
+				$('#general_product_data').addClass('show_if_obra_unica');
+
+				// Grupos y filas de precio
+				$wrap.find('.options_group.pricing').addClass('show_if_obra_unica');
+				$wrap.find('._regular_price_field, ._sale_price_field').addClass('show_if_obra_unica');
+				$wrap.find('._sale_price_dates_fields, .sale_price_dates_fields').addClass('show_if_obra_unica');
+
+				$(document.body).trigger('woocommerce_product_type_changed');
 			}
-			$(document.body).on('woocommerce_init woocommerce_product_type_changed', fcsd_apply);
-			fcsd_apply();
+			$(document.body).on('woocommerce_init woocommerce_product_type_changed', fcsd_show_price_fields);
+			fcsd_show_price_fields();
 		});
 		</script><?php
 	}
@@ -341,6 +401,27 @@ class FCSD_Commerce {
 				if ( (int) $it['quantity'] !== 1 ) {
 					WC()->cart->set_quantity( $k, 1, true );
 				}
+			}
+		}
+	}
+
+	/* ========= Red de seguridad de precio ========= */
+
+	public function ensure_unique_product_price_in_cart( WC_Cart $cart ) {
+		if ( is_admin() && ! defined('DOING_AJAX') ) return;
+		foreach ( $cart->get_cart() as $cart_item ) {
+			$p = $cart_item['data'] ?? null;
+			if ( ! ( $p instanceof WC_Product ) ) continue;
+			if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) continue;
+
+			$price = (float) $p->get_price();
+			if ( $price > 0 ) continue;
+
+			$sale = $p->get_sale_price();
+			$reg  = $p->get_regular_price();
+			$fallback = $sale !== '' ? (float) $sale : ( $reg !== '' ? (float) $reg : 0 );
+			if ( $fallback > 0 ) {
+				$p->set_price( $fallback );
 			}
 		}
 	}
@@ -514,6 +595,41 @@ class FCSD_Commerce {
 			}
 		}
 		return $pre;
+	}
+
+	/* ========= Sync de stock tras compra ========= */
+
+	/** Llamada cuando WooCommerce reduce stock de un pedido */
+	public function sync_unique_stock_after_reduction( $order ) {
+		if ( ! $order instanceof WC_Order ) return;
+		$this->sync_unique_items_of_order( $order );
+	}
+
+	/** Llamada cuando el pedido está pagado */
+	public function sync_unique_stock_on_paid( $order_id ) {
+		$order = is_numeric( $order_id ) ? wc_get_order( $order_id ) : ( $order_id instanceof WC_Order ? $order_id : null );
+		if ( ! $order ) return;
+		$this->sync_unique_items_of_order( $order );
+	}
+
+	/** Asegura outofstock + limpia caché para obras únicas con qty<=0 */
+	private function sync_unique_items_of_order( WC_Order $order ) {
+		foreach ( $order->get_items() as $item ) {
+			$p = $item->get_product();
+			if ( ! $p instanceof WC_Product ) continue;
+			if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) continue;
+
+			$qty = (int) $p->get_stock_quantity();
+			if ( $qty <= 0 ) {
+				$p->set_stock_quantity( 0 );
+				$p->set_stock_status( 'outofstock' );
+				$p->save();
+				if ( function_exists( 'wc_delete_product_transients' ) ) {
+					wc_delete_product_transients( $p->get_id() );
+				}
+				clean_post_cache( $p->get_id() );
+			}
+		}
 	}
 }
 
