@@ -113,14 +113,14 @@ class FCSD_Core {
 				$changed = true;
 			}
 
-			// Si dice "instock" pero qty <= 0, corrige cantidad a 1 (estado declarado prevalece)
+			// Si dice "instock" pero qty <= 0, corrige cantidad a 1
 			if ( $qty <= 0 && $status === 'instock' ) {
 				$p->set_stock_quantity( 1 );
 				$qty = 1;
 				$changed = true;
 			}
 
-			// Sincroniza estado con cantidad (no revivir si está outofstock y qty 0)
+			// Sincroniza estado con cantidad
 			if ( $qty <= 0 && $status !== 'outofstock' ) {
 				$p->set_stock_status( 'outofstock' );
 				$changed = true;
