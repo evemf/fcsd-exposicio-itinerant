@@ -23,11 +23,11 @@ class FCSD_Commerce {
 		add_action( 'woocommerce_admin_process_product_object', [ $this, 'save_meta_and_lock_stock' ] );
 		add_action( 'woocommerce_process_product_meta',      [ $this, 'save_meta_legacy' ] );
 
-		/* ---- Forzado tempranísimo del tipo en el request (antes de que Woo guarde) ---- */
+		/* ---- Forzado tempranísimo del tipo en el request ---- */
 		add_action( 'admin_init', [ $this, 'force_request_product_type_early' ], 0 );
 
-		/* ---- Forzados de tipo (leer + guardar + quick edit) ---- */
-		add_filter( 'woocommerce_get_product_type',          [ $this, 'filter_wc_get_product_type' ], PHP_INT_MAX, 2 );
+		/* ---- Forzados de tipo (lectura + guardar + quick edit) ---- */
+		add_filter( 'woocommerce_product_type_query',        [ $this, 'filter_product_type_query' ], PHP_INT_MAX, 2 ); // << clave
 		add_action( 'load-post.php',                         [ $this, 'maybe_fix_type_on_editor_load' ] );
 		add_action( 'woocommerce_after_product_object_save', [ $this, 'force_type_after_product_object_save' ], PHP_INT_MAX, 2 );
 		add_action( 'save_post_product',                     [ $this, 'force_type_on_save_post' ],            PHP_INT_MAX, 3 );
@@ -142,31 +142,36 @@ class FCSD_Commerce {
 		if ( isset( $_POST[ FCSD_Core::META_ANY ] ) )     $product->update_meta_data( FCSD_Core::META_ANY,     intval( $_POST[ FCSD_Core::META_ANY ] ) );
 		if ( isset( $_POST[ FCSD_Core::META_MESURES ] ) ) $product->update_meta_data( FCSD_Core::META_MESURES, sanitize_text_field( wp_unslash( $_POST[ FCSD_Core::META_MESURES ] ) ) );
 
-		// Stock base
+		// Config base del tipo único
 		$product->set_manage_stock( true );
 		$product->set_backorders( 'no' );
 		$product->set_sold_individually( true );
 		$product->set_catalog_visibility( 'hidden' );
 
-		// Normalización robusta (1/1 salvo outofstock explícito)
-		$qty_raw       = $product->get_stock_quantity();
-		$qty           = ( $qty_raw === '' || $qty_raw === null ) ? 0 : (int) $qty_raw;
-		$posted_status = isset( $_POST['_stock_status'] ) ? sanitize_text_field( wp_unslash( $_POST['_stock_status'] ) ) : '';
-		$explicit_oos  = ( $posted_status === 'outofstock' );
+		// ——— CLAVE: respetar 0 cuando el usuario lo guarda ———
+		// Woo no envía _stock_status cuando manage_stock = true, así que tomamos la cantidad del POST.
+		$posted_qty = isset($_POST['_stock']) ? wc_stock_amount( wp_unslash( $_POST['_stock'] ) ) : null;
 
-		if ( $qty < 1 ) {
-			if ( $explicit_oos ) {
-				$product->set_stock_quantity( 0 );
-				$product->set_stock_status( 'outofstock' );
-			} else {
-				$product->set_stock_quantity( 1 );
-				$product->set_stock_status( 'instock' );
-			}
+		if ( $posted_qty !== null ) {
+			$qty = (int) $posted_qty;
 		} else {
-			$product->set_stock_quantity( min( 1, $qty ) );
+			$qty = (int) $product->get_stock_quantity();
+		}
+
+		if ( $qty <= 0 ) {
+			$product->set_stock_quantity( 0 );
+			$product->set_stock_status( 'outofstock' );
+		} else {
+			// Para obra única, si hay stock siempre es 1.
+			$product->set_stock_quantity( 1 );
 			$product->set_stock_status( 'instock' );
 		}
+
+		// Asegura el término/tipo
+		wp_set_object_terms( $product->get_id(), FCSD_Core::PRODUCT_TYPE, 'product_type', false );
+		update_post_meta( $product->get_id(), '_product_type', FCSD_Core::PRODUCT_TYPE );
 	}
+
 
 	public function save_meta_legacy( $post_id ) {
 		// Guardado clásico: sólo meta; el tipo lo forzamos aparte.
@@ -189,15 +194,17 @@ class FCSD_Commerce {
 		$panel_flag  = isset($_POST['_fcsd_force_unique']) && $_POST['_fcsd_force_unique'] === '1';
 
 		if ( $posted_type === FCSD_Core::PRODUCT_TYPE || $has_fields || $panel_flag ) {
-			$_POST['product-type'] = FCSD_Core::PRODUCT_TYPE; // <- Woo guardará este tipo
+			$_POST['product-type'] = FCSD_Core::PRODUCT_TYPE; // Woo guardará este tipo
 		}
 	}
 
 	/* ==== Forzados de tipo (lectura + distintas rutas de guardado) ==== */
 
-	public function filter_wc_get_product_type( $type, $product_id ) {
+	/** Fija el tipo cuando WooCommerce lo consulta para construir el objeto/selector. */
+	public function filter_product_type_query( $type, $product_id ) {
 		if ( ! $product_id ) return $type;
 
+		// Term o meta explícitos → nuestro tipo
 		if ( has_term( FCSD_Core::PRODUCT_TYPE, 'product_type', $product_id ) ) {
 			return FCSD_Core::PRODUCT_TYPE;
 		}
@@ -205,6 +212,7 @@ class FCSD_Commerce {
 		if ( $meta_type === FCSD_Core::PRODUCT_TYPE ) {
 			return FCSD_Core::PRODUCT_TYPE;
 		}
+		// Metacampos presentes → también nuestro tipo
 		if ( get_post_meta( $product_id, FCSD_Core::META_AUTOR, true )
 		  || get_post_meta( $product_id, FCSD_Core::META_ANY, true )
 		  || get_post_meta( $product_id, FCSD_Core::META_MESURES, true ) ) {
@@ -217,7 +225,7 @@ class FCSD_Commerce {
 		$pid = isset($_GET['post']) ? absint($_GET['post']) : 0;
 		if ( ! $pid || get_post_type( $pid ) !== 'product' ) return;
 
-		$should_be = apply_filters( 'woocommerce_get_product_type', 'simple', $pid );
+		$should_be = apply_filters( 'woocommerce_product_type_query', 'simple', $pid );
 		if ( $should_be === FCSD_Core::PRODUCT_TYPE && ! has_term( FCSD_Core::PRODUCT_TYPE, 'product_type', $pid ) ) {
 			$this->force_product_type_now( $pid );
 		}
