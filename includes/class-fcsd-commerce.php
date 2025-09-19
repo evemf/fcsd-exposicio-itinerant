@@ -1,55 +1,42 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-/**
- * WooCommerce: tipo de producto, metadatos, carrito, pasarelas, checkout,
- * emails extra y ajustes de admin.
- */
 if ( ! class_exists( 'FCSD_Commerce' ) ) :
 
 class FCSD_Commerce {
-
-	/** @var FCSD_Core */
 	private $core;
 
 	public function __construct( FCSD_Core $core ) {
 		$this->core = $core;
 
-		/* ---- Tipo de producto y metadatos ---- */
-		add_filter( 'product_type_selector',                 [ $this, 'register_product_type_in_selector' ] );
-		add_filter( 'woocommerce_product_class',             [ $this, 'map_product_type_class' ], 10, 2 );
+		add_filter( 'product_type_selector', [ $this, 'register_product_type_in_selector' ] );
+		add_filter( 'woocommerce_product_class', [ $this, 'map_product_type_class' ], 10, 2 );
 		add_filter( 'woocommerce_product_data_tabs', [ $this, 'add_product_data_tab' ], PHP_INT_MAX );
-		add_action( 'woocommerce_product_data_panels',       [ $this, 'render_product_data_panel' ] );
+		add_action( 'woocommerce_product_data_panels', [ $this, 'render_product_data_panel' ] );
 		add_action( 'woocommerce_admin_process_product_object', [ $this, 'save_meta_and_lock_stock' ] );
-		add_action( 'woocommerce_process_product_meta',      [ $this, 'save_meta_legacy' ] );
+		add_action( 'woocommerce_process_product_meta', [ $this, 'save_meta_legacy' ] );
+        add_action( 'woocommerce_checkout_create_order_line_item', [ $this, 'enforce_line_item_price' ], 20, 4 );
 
-		/* ---- Forzado tempranísimo del tipo en el request ---- */
 		add_action( 'admin_init', [ $this, 'force_request_product_type_early' ], 0 );
 
-		/* ---- Forzados de tipo (lectura + guardar + quick edit) ---- */
-		// Soportamos ambos filtros por compatibilidad con distintas versiones.
-		add_filter( 'woocommerce_product_type_query',        [ $this, 'filter_product_type_query' ], PHP_INT_MAX, 2 );
-		add_filter( 'woocommerce_get_product_type',          [ $this, 'filter_product_type_query' ], PHP_INT_MAX, 2 );
-		add_action( 'load-post.php',                         [ $this, 'maybe_fix_type_on_editor_load' ] );
+		add_filter( 'woocommerce_product_type_query', [ $this, 'filter_product_type_query' ], PHP_INT_MAX, 2 );
+		add_filter( 'woocommerce_get_product_type', [ $this, 'filter_product_type_query' ], PHP_INT_MAX, 2 );
+		add_action( 'load-post.php', [ $this, 'maybe_fix_type_on_editor_load' ] );
 		add_action( 'woocommerce_after_product_object_save', [ $this, 'force_type_after_product_object_save' ], PHP_INT_MAX, 2 );
-		add_action( 'save_post_product',                     [ $this, 'force_type_on_save_post' ],            PHP_INT_MAX, 3 );
-		add_action( 'woocommerce_product_quick_edit_save',   [ $this, 'force_type_on_quick_edit' ],           PHP_INT_MAX, 1 );
+		add_action( 'save_post_product', [ $this, 'force_type_on_save_post' ], PHP_INT_MAX, 3 );
+		add_action( 'woocommerce_product_quick_edit_save', [ $this, 'force_type_on_quick_edit' ], PHP_INT_MAX, 1 );
 
 		add_action( 'admin_footer', [ $this, 'admin_js_show_price_for_obra_unica' ] );
 
-		/* ---- Gateways ---- */
-		add_filter( 'woocommerce_default_gateway',            [ $this, 'maybe_force_default_gateway' ] );
+		add_filter( 'woocommerce_default_gateway', [ $this, 'maybe_force_default_gateway' ] );
 		add_filter( 'woocommerce_available_payment_gateways', [ $this, 'maybe_limit_gateways' ] );
 
-		/* ---- Carrito ---- */
 		add_filter( 'woocommerce_add_to_cart_validation', [ $this, 'enforce_single_item_cart_for_unique' ], 0, 6 );
-		add_action( 'init',                             [ $this, 'maybe_preemptively_flush_cart' ], 1 );
-		add_action( 'woocommerce_check_cart_items',     [ $this, 'enforce_only_unique_in_cart' ], 0 );
+		add_action( 'init', [ $this, 'maybe_preemptively_flush_cart' ], 1 );
+		add_action( 'woocommerce_check_cart_items', [ $this, 'enforce_only_unique_in_cart' ], 0 );
 
-		/* ---- Red de seguridad de precio en carrito ---- */
 		add_action( 'woocommerce_before_calculate_totals', [ $this, 'ensure_unique_product_price_in_cart' ], 20 );
 
-		/* ---- Emails extra ---- */
 		foreach ( [
 			'woocommerce_email_recipient_new_order',
 			'woocommerce_email_recipient_cancelled_order',
@@ -60,29 +47,24 @@ class FCSD_Commerce {
 			add_filter( $hook, [ $this, 'add_extra_recipient_if_obra_unica' ], 10, 2 );
 		}
 
-		/* ---- Ajustes de admin ---- */
 		add_action( 'admin_menu', [ $this, 'add_admin_page' ] );
 		add_action( 'admin_init', [ $this, 'register_settings' ] );
 
-		/* ---- Checkout mínimo ---- */
-		add_filter( 'woocommerce_checkout_fields',                 [ $this, 'unique_minimal_checkout' ], 20 );
-		add_filter( 'woocommerce_billing_fields',                  [ $this, 'unique_relax_billing_required' ], 20 );
-		add_filter( 'woocommerce_cart_needs_shipping',             [ $this, 'unique_no_shipping' ], 10 );
-		add_filter( 'woocommerce_cart_needs_shipping_address',     [ $this, 'unique_no_shipping_address' ], 10 );
-		add_filter( 'woocommerce_checkout_posted_data',            [ $this, 'unique_autofill_country' ], 20 );
+		add_filter( 'woocommerce_checkout_fields', [ $this, 'unique_minimal_checkout' ], 20 );
+		add_filter( 'woocommerce_billing_fields', [ $this, 'unique_relax_billing_required' ], 20 );
+		add_filter( 'woocommerce_cart_needs_shipping', [ $this, 'unique_no_shipping' ], 10 );
+		add_filter( 'woocommerce_cart_needs_shipping_address', [ $this, 'unique_no_shipping_address' ], 10 );
+		add_filter( 'woocommerce_checkout_posted_data', [ $this, 'unique_autofill_country' ], 20 );
 		add_filter( 'pre_option_woocommerce_enable_guest_checkout', [ $this, 'unique_force_guest_checkout' ] );
-
-		/* ---- Evita “stock retenido” en checkout para obra_unica ---- */
 		add_filter( 'pre_option_woocommerce_hold_stock_minutes', [ $this, 'disable_hold_stock_for_unique_checkout_only' ] );
+		add_filter( 'woocommerce_enable_order_notes_field', [ $this, 'unique_disable_order_notes' ], 99 );
+		add_action( 'wp_head', [ $this, 'unique_hide_additional_heading_css' ] );
 
-		/* ---- Sincroniza estado de stock tras compra (para ocultar botón Pagar) ---- */
-		add_action( 'woocommerce_reduce_order_stock',           [ $this, 'sync_unique_stock_after_reduction' ], 20, 1 );
-		add_action( 'woocommerce_payment_complete',             [ $this, 'sync_unique_stock_on_paid' ], 20, 1 );
-		add_action( 'woocommerce_order_status_processing',      [ $this, 'sync_unique_stock_on_paid' ], 20, 1 );
-		add_action( 'woocommerce_order_status_completed',       [ $this, 'sync_unique_stock_on_paid' ], 20, 1 );
+		add_action( 'woocommerce_reduce_order_stock', [ $this, 'sync_unique_stock_after_reduction' ], 20, 1 );
+		add_action( 'woocommerce_payment_complete', [ $this, 'sync_unique_stock_on_paid' ], 20, 1 );
+		add_action( 'woocommerce_order_status_processing', [ $this, 'sync_unique_stock_on_paid' ], 20, 1 );
+		add_action( 'woocommerce_order_status_completed', [ $this, 'sync_unique_stock_on_paid' ], 20, 1 );
 	}
-
-	/* ========= Tipo de producto y metadatos ========= */
 
 	public function register_product_type_in_selector( $types ) {
 		$types[ FCSD_Core::PRODUCT_TYPE ] = __( "Obra d’art única", 'fcsd-exposicio' );
@@ -95,33 +77,26 @@ class FCSD_Commerce {
 	}
 
 	public function add_product_data_tab( $tabs ) {
-		// Asegura que exista la pestaña "General"
 		if ( ! isset( $tabs['general'] ) ) {
 			$tabs['general'] = [
-				'label'    => __( 'General', 'woocommerce' ),
-				'target'   => 'general_product_data',
-				'class'    => [ 'general_options' ],
+				'label' => __( 'General', 'woocommerce' ),
+				'target' => 'general_product_data',
+				'class' => [ 'general_options' ],
 				'priority' => 10,
 			];
 		}
-		// Muestra "General" también para obra_unica
 		$tabs['general']['class'] = isset( $tabs['general']['class'] ) ? (array) $tabs['general']['class'] : [];
 		$tabs['general']['class'][] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
-
-		// Asegura visibilidad de Inventario
 		if ( isset( $tabs['inventory'] ) ) {
 			$tabs['inventory']['class'] = isset( $tabs['inventory']['class'] ) ? (array) $tabs['inventory']['class'] : [];
 			$tabs['inventory']['class'][] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
 		}
-
-		// Nuestra pestaña
 		$tabs['fcsd_obra_unica'] = [
-			'label'    => __( "Obra d’art única", 'fcsd-exposicio' ),
-			'target'   => 'fcsd_obra_unica_data',
-			'class'    => [ 'show_if_' . FCSD_Core::PRODUCT_TYPE ],
+			'label' => __( "Obra d’art única", 'fcsd-exposicio' ),
+			'target' => 'fcsd_obra_unica_data',
+			'class' => [ 'show_if_' . FCSD_Core::PRODUCT_TYPE ],
 			'priority' => 21,
 		];
-
 		return $tabs;
 	}
 
@@ -131,25 +106,25 @@ class FCSD_Commerce {
 			<input type="hidden" name="_fcsd_force_unique" value="1" />
 			<?php
 			woocommerce_wp_text_input( [
-				'id'            => FCSD_Core::META_AUTOR,
-				'label'         => __( 'Autor/a', 'fcsd-exposicio' ),
-				'desc_tip'      => true,
-				'description'   => __( 'Nom de l’autor/a o creador/a de l’obra.', 'fcsd-exposicio' ),
+				'id' => FCSD_Core::META_AUTOR,
+				'label' => __( 'Autor/a', 'fcsd-exposicio' ),
+				'desc_tip' => true,
+				'description' => __( 'Nom de l’autor/a o creador/a de l’obra.', 'fcsd-exposicio' ),
 				'wrapper_class' => 'show_if_' . FCSD_Core::PRODUCT_TYPE,
 			] );
 			woocommerce_wp_text_input( [
-				'id'            => FCSD_Core::META_ANY,
-				'label'         => __( 'Any de creació', 'fcsd-exposicio' ),
-				'desc_tip'      => true,
-				'description'   => __( 'Any de creació de l’obra (numèric).', 'fcsd-exposicio' ),
-				'type'          => 'number',
+				'id' => FCSD_Core::META_ANY,
+				'label' => __( 'Any de creació', 'fcsd-exposicio' ),
+				'desc_tip' => true,
+				'description' => __( 'Any de creació de l’obra (numèric).', 'fcsd-exposicio' ),
+				'type' => 'number',
 				'wrapper_class' => 'show_if_' . FCSD_Core::PRODUCT_TYPE,
 			] );
 			woocommerce_wp_text_input( [
-				'id'            => FCSD_Core::META_MESURES,
-				'label'         => __( 'Mesures', 'fcsd-exposicio' ),
-				'desc_tip'      => true,
-				'description'   => __( 'Exemple: 50×70 cm, 30×50 cm…', 'fcsd-exposicio' ),
+				'id' => FCSD_Core::META_MESURES,
+				'label' => __( 'Mesures', 'fcsd-exposicio' ),
+				'desc_tip' => true,
+				'description' => __( 'Exemple: 50×70 cm, 30×50 cm…', 'fcsd-exposicio' ),
 				'wrapper_class' => 'show_if_' . FCSD_Core::PRODUCT_TYPE,
 			] );
 			?>
@@ -164,102 +139,81 @@ class FCSD_Commerce {
 	public function save_meta_and_lock_stock( $product ) {
 		$posted_type = isset($_POST['product-type']) ? sanitize_text_field( wp_unslash($_POST['product-type']) ) : '';
 		$has_fields  = ( ! empty($_POST[FCSD_Core::META_AUTOR]) || ! empty($_POST[FCSD_Core::META_ANY]) || ! empty($_POST[FCSD_Core::META_MESURES]) );
-		$make_unique = ( $posted_type === FCSD_Core::PRODUCT_TYPE ) || $has_fields;
-		if ( ! $make_unique ) return;
+		if ( $posted_type !== FCSD_Core::PRODUCT_TYPE && ! $has_fields ) return;
 
-		// Metadatos
 		if ( isset( $_POST[ FCSD_Core::META_AUTOR ] ) )   $product->update_meta_data( FCSD_Core::META_AUTOR,   sanitize_text_field( wp_unslash( $_POST[ FCSD_Core::META_AUTOR ] ) ) );
 		if ( isset( $_POST[ FCSD_Core::META_ANY ] ) )     $product->update_meta_data( FCSD_Core::META_ANY,     intval( $_POST[ FCSD_Core::META_ANY ] ) );
 		if ( isset( $_POST[ FCSD_Core::META_MESURES ] ) ) $product->update_meta_data( FCSD_Core::META_MESURES, sanitize_text_field( wp_unslash( $_POST[ FCSD_Core::META_MESURES ] ) ) );
 
-		if ( isset($_POST['_regular_price']) ) {
-			$product->set_regular_price( wc_clean( wp_unslash( $_POST['_regular_price'] ) ) );
-		}
-		if ( isset($_POST['_sale_price']) ) {
-			$product->set_sale_price( wc_clean( wp_unslash( $_POST['_sale_price'] ) ) );
-		}
-		// Precio efectivo
-		$effective = $product->get_sale_price() !== '' ? $product->get_sale_price() : $product->get_regular_price();
-		if ( $effective !== '' ) {
-			$product->set_price( $effective );
-		}
-		// --- Forzar guardado de precio (algunos temas no lo persisten en tipos custom) ---
-		if ( isset($_POST['_regular_price']) ) {
-			$regular = wc_clean( wp_unslash( $_POST['_regular_price'] ) );
-			$product->set_regular_price( $regular );
-		}
-		if ( isset($_POST['_sale_price']) ) {
-			$sale = wc_clean( wp_unslash( $_POST['_sale_price'] ) );
-			$product->set_sale_price( $sale );
-		}
-		$effective = $product->get_sale_price() !== '' ? $product->get_sale_price() : $product->get_regular_price();
-		if ( $effective !== '' ) {
-			$product->set_price( $effective );
-		}
+		if ( isset($_POST['_regular_price']) ) $product->set_regular_price( wc_clean( wp_unslash( $_POST['_regular_price'] ) ) );
+		if ( isset($_POST['_sale_price']) )    $product->set_sale_price( wc_clean( wp_unslash( $_POST['_sale_price'] ) ) );
+		$price = $product->get_sale_price() !== '' ? $product->get_sale_price() : $product->get_regular_price();
+		if ( $price !== '' ) $product->set_price( $price );
 
-		// Config base del tipo único
 		$product->set_manage_stock( true );
 		$product->set_backorders( 'no' );
 		$product->set_sold_individually( true );
 		$product->set_catalog_visibility( 'hidden' );
 
-		// Respetar 0 cuando el usuario lo guarda (Woo no envía _stock_status con manage_stock = true)
 		$posted_qty = isset($_POST['_stock']) ? wc_stock_amount( wp_unslash( $_POST['_stock'] ) ) : null;
 		$qty = $posted_qty !== null ? (int) $posted_qty : (int) $product->get_stock_quantity();
-
 		if ( $qty <= 0 ) {
 			$product->set_stock_quantity( 0 );
 			$product->set_stock_status( 'outofstock' );
 		} else {
-			$product->set_stock_quantity( 1 ); // obra única
+			$product->set_stock_quantity( 1 );
 			$product->set_stock_status( 'instock' );
 		}
 
-		// Asegura el término/tipo
 		wp_set_object_terms( $product->get_id(), FCSD_Core::PRODUCT_TYPE, 'product_type', false );
 		update_post_meta( $product->get_id(), '_product_type', FCSD_Core::PRODUCT_TYPE );
 	}
 
 	public function save_meta_legacy( $post_id ) {
-		// Guardado clásico: sólo meta; el tipo lo forzamos aparte.
 		if ( isset( $_POST[ FCSD_Core::META_AUTOR ] ) )   update_post_meta( $post_id, FCSD_Core::META_AUTOR,   sanitize_text_field( wp_unslash( $_POST[ FCSD_Core::META_AUTOR ] ) ) );
 		if ( isset( $_POST[ FCSD_Core::META_ANY ] ) )     update_post_meta( $post_id, FCSD_Core::META_ANY,     intval( $_POST[ FCSD_Core::META_ANY ] ) );
 		if ( isset( $_POST[ FCSD_Core::META_MESURES ] ) ) update_post_meta( $post_id, FCSD_Core::META_MESURES, sanitize_text_field( wp_unslash( $_POST[ FCSD_Core::META_MESURES ] ) ) );
 	}
 
-	/* ==== Forzado tempranísimo del tipo en el request ==== */
+	public function enforce_line_item_price( $item, $cart_item_key, $values, $order ) {
+		$p = $item->get_product();
+		if ( ! ( $p instanceof WC_Product ) ) return;
+		if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) return;
+
+		$line_total = (float) $item->get_total();
+		$qty        = max( 1, (int) $item->get_quantity() );
+
+		if ( $line_total <= 0 ) {
+			$price = $p->get_price();
+			if ( $price === '' || $price === null || (float) $price <= 0 ) {
+				$fallback = $p->get_sale_price() !== '' ? $p->get_sale_price() : $p->get_regular_price();
+				$price    = $fallback !== '' ? $fallback : 0;
+			}
+			if ( (float) $price > 0 ) {
+				$item->set_subtotal( (float) $price * $qty );
+				$item->set_total( (float) $price * $qty );
+			}
+		}
+	}
 
 	public function force_request_product_type_early() {
 		if ( ! is_admin() || empty($_POST) ) return;
 		if ( ! isset($_POST['post_type']) || $_POST['post_type'] !== 'product' ) return;
-
 		$nonce = isset($_POST['woocommerce_meta_nonce']) ? $_POST['woocommerce_meta_nonce'] : '';
 		if ( ! $nonce || ! wp_verify_nonce( $nonce, 'woocommerce_save_data' ) ) return;
-
 		$posted_type = isset($_POST['product-type']) ? sanitize_text_field( wp_unslash($_POST['product-type']) ) : '';
 		$has_fields  = ( ! empty($_POST[FCSD_Core::META_AUTOR]) || ! empty($_POST[FCSD_Core::META_ANY]) || ! empty($_POST[FCSD_Core::META_MESURES]) );
 		$panel_flag  = isset($_POST['_fcsd_force_unique']) && $_POST['_fcsd_force_unique'] === '1';
-
 		if ( $posted_type === FCSD_Core::PRODUCT_TYPE || $has_fields || $panel_flag ) {
-			$_POST['product-type'] = FCSD_Core::PRODUCT_TYPE; // Woo guardará este tipo
+			$_POST['product-type'] = FCSD_Core::PRODUCT_TYPE;
 		}
 	}
 
-	/* ==== Forzados de tipo (lectura + distintas rutas de guardado) ==== */
-
-	/** Fija el tipo cuando WooCommerce lo consulta para construir el objeto/selector. */
 	public function filter_product_type_query( $type, $product_id ) {
 		if ( ! $product_id ) return $type;
-
-		// Term o meta explícitos → nuestro tipo
-		if ( has_term( FCSD_Core::PRODUCT_TYPE, 'product_type', $product_id ) ) {
-			return FCSD_Core::PRODUCT_TYPE;
-		}
+		if ( has_term( FCSD_Core::PRODUCT_TYPE, 'product_type', $product_id ) ) return FCSD_Core::PRODUCT_TYPE;
 		$meta_type = get_post_meta( $product_id, '_product_type', true );
-		if ( $meta_type === FCSD_Core::PRODUCT_TYPE ) {
-			return FCSD_Core::PRODUCT_TYPE;
-		}
-		// Metacampos presentes → también nuestro tipo
+		if ( $meta_type === FCSD_Core::PRODUCT_TYPE ) return FCSD_Core::PRODUCT_TYPE;
 		if ( get_post_meta( $product_id, FCSD_Core::META_AUTOR, true )
 		  || get_post_meta( $product_id, FCSD_Core::META_ANY, true )
 		  || get_post_meta( $product_id, FCSD_Core::META_MESURES, true ) ) {
@@ -271,7 +225,6 @@ class FCSD_Commerce {
 	public function maybe_fix_type_on_editor_load() {
 		$pid = isset($_GET['post']) ? absint($_GET['post']) : 0;
 		if ( ! $pid || get_post_type( $pid ) !== 'product' ) return;
-
 		$should_be = apply_filters( 'woocommerce_product_type_query', 'simple', $pid );
 		if ( $should_be === FCSD_Core::PRODUCT_TYPE && ! has_term( FCSD_Core::PRODUCT_TYPE, 'product_type', $pid ) ) {
 			$this->force_product_type_now( $pid );
@@ -291,9 +244,7 @@ class FCSD_Commerce {
 	}
 
 	public function force_type_on_quick_edit( $product ) {
-		if ( $product instanceof WC_Product ) {
-			$this->force_product_type_now( $product->get_id() );
-		}
+		if ( $product instanceof WC_Product ) $this->force_product_type_now( $product->get_id() );
 	}
 
 	private function force_product_type_now( $product_id ) : void {
@@ -302,32 +253,22 @@ class FCSD_Commerce {
 		}
 		wp_set_object_terms( $product_id, FCSD_Core::PRODUCT_TYPE, 'product_type', false );
 		update_post_meta( $product_id, '_product_type', FCSD_Core::PRODUCT_TYPE );
-
-		if ( function_exists( 'wc_delete_product_transients' ) ) {
-			wc_delete_product_transients( $product_id );
-		}
+		if ( function_exists( 'wc_delete_product_transients' ) ) wc_delete_product_transients( $product_id );
 		clean_post_cache( $product_id );
 	}
 
 	public function admin_js_show_price_for_obra_unica() {
 		$screen = function_exists('get_current_screen') ? get_current_screen() : null;
 		if ( ! $screen || $screen->id !== 'product' ) return; ?>
-		<style>
-			.post-type-product .show_if_obra_unica { display:block !important; }
-		</style>
+		<style>.post-type-product .show_if_obra_unica{display:block!important}</style>
 		<script>
 		jQuery(function($){
 			function fcsd_show_price_fields(){
 				var $wrap = $('#woocommerce-product-data');
-
-				// Mostrar pestaña/panel General
 				$('#general_product_data').addClass('show_if_obra_unica');
-
-				// Grupos y filas de precio
 				$wrap.find('.options_group.pricing').addClass('show_if_obra_unica');
 				$wrap.find('._regular_price_field, ._sale_price_field').addClass('show_if_obra_unica');
 				$wrap.find('._sale_price_dates_fields, .sale_price_dates_fields').addClass('show_if_obra_unica');
-
 				$(document.body).trigger('woocommerce_product_type_changed');
 			}
 			$(document.body).on('woocommerce_init woocommerce_product_type_changed', fcsd_show_price_fields);
@@ -335,8 +276,6 @@ class FCSD_Commerce {
 		});
 		</script><?php
 	}
-
-	/* ========= Gateways ========= */
 
 	public function maybe_force_default_gateway( $default ) {
 		$forced = WC()->session ? WC()->session->get( FCSD_Core::SESSION_GW ) : '';
@@ -349,26 +288,18 @@ class FCSD_Commerce {
 		if ( ! WC()->cart ) return $gateways;
 		$contains_unique = false;
 		foreach ( WC()->cart->get_cart() as $item ) {
-			if ( isset( $item['data'] ) && $item['data'] instanceof WC_Product && $item['data']->get_type() === FCSD_Core::PRODUCT_TYPE ) {
-				$contains_unique = true; break;
-			}
+			if ( isset( $item['data'] ) && $item['data'] instanceof WC_Product && $item['data']->get_type() === FCSD_Core::PRODUCT_TYPE ) { $contains_unique = true; break; }
 		}
 		$forced = WC()->session ? WC()->session->get( FCSD_Core::SESSION_GW ) : '';
 		if ( ! $contains_unique || ! $forced ) return $gateways;
-		foreach ( $gateways as $id => $gw ) {
-			if ( $id !== $forced ) unset( $gateways[$id] );
-		}
+		foreach ( $gateways as $id => $gw ) { if ( $id !== $forced ) unset( $gateways[$id] ); }
 		return $gateways;
 	}
-
-	/* ========= Carrito ========= */
 
 	public function enforce_single_item_cart_for_unique( $passed, $product_id, $quantity, $variation_id = 0, $variations = [], $cart_item_data = [] ) {
 		$p = wc_get_product( $product_id );
 		if ( $p && $p->get_type() === FCSD_Core::PRODUCT_TYPE ) {
-			if ( WC()->cart && ! WC()->cart->is_empty() ) {
-				WC()->cart->empty_cart();
-			}
+			if ( WC()->cart && ! WC()->cart->is_empty() ) WC()->cart->empty_cart();
 		}
 		return $passed;
 	}
@@ -378,9 +309,7 @@ class FCSD_Commerce {
 		if ( ! $id ) return;
 		$p = wc_get_product( $id );
 		if ( $p && $p->get_type() === FCSD_Core::PRODUCT_TYPE ) {
-			if ( WC()->cart && ! WC()->cart->is_empty() ) {
-				WC()->cart->empty_cart();
-			}
+			if ( WC()->cart && ! WC()->cart->is_empty() ) WC()->cart->empty_cart();
 		}
 	}
 
@@ -398,14 +327,10 @@ class FCSD_Commerce {
 			if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) {
 				WC()->cart->remove_cart_item( $k );
 			} else {
-				if ( (int) $it['quantity'] !== 1 ) {
-					WC()->cart->set_quantity( $k, 1, true );
-				}
+				if ( (int) $it['quantity'] !== 1 ) WC()->cart->set_quantity( $k, 1, true );
 			}
 		}
 	}
-
-	/* ========= Red de seguridad de precio ========= */
 
 	public function ensure_unique_product_price_in_cart( WC_Cart $cart ) {
 		if ( is_admin() && ! defined('DOING_AJAX') ) return;
@@ -413,20 +338,14 @@ class FCSD_Commerce {
 			$p = $cart_item['data'] ?? null;
 			if ( ! ( $p instanceof WC_Product ) ) continue;
 			if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) continue;
-
 			$price = (float) $p->get_price();
 			if ( $price > 0 ) continue;
-
 			$sale = $p->get_sale_price();
 			$reg  = $p->get_regular_price();
 			$fallback = $sale !== '' ? (float) $sale : ( $reg !== '' ? (float) $reg : 0 );
-			if ( $fallback > 0 ) {
-				$p->set_price( $fallback );
-			}
+			if ( $fallback > 0 ) $p->set_price( $fallback );
 		}
 	}
-
-	/* ========= Emails extra ========= */
 
 	public function add_extra_recipient_if_obra_unica( $recipient, $order ) {
 		if ( ! $order instanceof WC_Order ) return $recipient;
@@ -445,8 +364,6 @@ class FCSD_Commerce {
 		return $recipient;
 	}
 
-	/* ========= Ajustes de admin ========= */
-
 	public function add_admin_page() {
 		add_submenu_page(
 			'woocommerce',
@@ -460,8 +377,8 @@ class FCSD_Commerce {
 
 	public function register_settings() {
 		register_setting( 'fcsd_expo_group', FCSD_Core::OPT_EXTRA_EMAIL, [ 'type' => 'string', 'sanitize_callback' => 'sanitize_email' ] );
-		register_setting( 'fcsd_expo_group', FCSD_Core::OPT_GW_DEFAULT,  [ 'type' => 'string', 'sanitize_callback' => 'sanitize_text_field' ] );
-		register_setting( 'fcsd_expo_group', FCSD_Core::OPT_GW_BIZUM,    [ 'type' => 'string', 'sanitize_callback' => 'sanitize_text_field' ] );
+		register_setting( 'fcsd_expo_group', FCSD_Core::OPT_GW_DEFAULT, [ 'type' => 'string', 'sanitize_callback' => 'sanitize_text_field' ] );
+		register_setting( 'fcsd_expo_group', FCSD_Core::OPT_GW_BIZUM, [ 'type' => 'string', 'sanitize_callback' => 'sanitize_text_field' ] );
 	}
 
 	public function render_admin_page() {
@@ -510,16 +427,12 @@ class FCSD_Commerce {
 		<?php
 	}
 
-	/* ========= Checkout mínim (obra_unica) ========= */
-
 	private function is_unique_checkout_context() : bool {
 		if ( ! function_exists('is_checkout') || ! WC()->cart ) return false;
 		$at_checkout = is_checkout() || ( isset($_GET['add-to-cart']) && ! empty($_GET['fcsd_gw']) );
 		if ( ! $at_checkout ) return false;
-
 		$items = WC()->cart->get_cart();
 		if ( empty( $items ) ) return false;
-
 		foreach ( $items as $it ) {
 			$p = $it['data'] ?? null;
 			if ( ! ( $p instanceof WC_Product ) ) return false;
@@ -537,31 +450,18 @@ class FCSD_Commerce {
 
 	public function unique_minimal_checkout( $fields ) {
 		if ( ! $this->is_unique_checkout_context() ) return $fields;
-
 		$keep = [ 'billing_email', 'billing_first_name', 'billing_last_name' ];
-
 		foreach ( ['billing','shipping'] as $section ) {
 			if ( isset( $fields[ $section ] ) ) {
 				foreach ( array_keys( $fields[ $section ] ) as $key ) {
-					if ( ! in_array( $key, $keep, true ) ) {
-						unset( $fields[ $section ][ $key ] );
-					}
+					if ( ! in_array( $key, $keep, true ) ) unset( $fields[ $section ][ $key ] );
 				}
 			}
 		}
-
 		unset( $fields['order']['order_comments'], $fields['account'] );
-
-		if ( isset( $fields['billing']['billing_email'] ) ) {
-			$fields['billing']['billing_email']['required'] = true;
-		}
-		if ( isset( $fields['billing']['billing_first_name'] ) ) {
-			$fields['billing']['billing_first_name']['required'] = false;
-		}
-		if ( isset( $fields['billing']['billing_last_name'] ) ) {
-			$fields['billing']['billing_last_name']['required'] = false;
-		}
-
+		if ( isset( $fields['billing']['billing_email'] ) ) $fields['billing']['billing_email']['required'] = true;
+		if ( isset( $fields['billing']['billing_first_name'] ) ) $fields['billing']['billing_first_name']['required'] = false;
+		if ( isset( $fields['billing']['billing_last_name'] ) )  $fields['billing']['billing_last_name']['required'] = false;
 		return $fields;
 	}
 
@@ -590,54 +490,57 @@ class FCSD_Commerce {
 		if ( is_admin() || ! WC()->cart ) return $pre;
 		foreach ( WC()->cart->get_cart() as $it ) {
 			$p = $it['data'] ?? null;
-			if ( $p instanceof WC_Product && $p->get_type() === FCSD_Core::PRODUCT_TYPE ) {
-				return '0'; // no retener stock
-			}
+			if ( $p instanceof WC_Product && $p->get_type() === FCSD_Core::PRODUCT_TYPE ) return '0';
 		}
 		return $pre;
 	}
 
-	/* ========= Sync de stock tras compra ========= */
+	public function unique_disable_order_notes( $enabled ) {
+		return $this->is_unique_checkout_context() ? false : $enabled;
+	}
 
-	/** Llamada cuando WooCommerce reduce stock de un pedido */
+	public function unique_hide_additional_heading_css() {
+		if ( ! function_exists('is_checkout') || ! is_checkout() ) return;
+		if ( ! $this->is_unique_checkout_context() ) return;
+		?>
+		<style>
+			.woocommerce-checkout .woocommerce-additional-fields > h3{display:none!important}
+			#customer_details .col-2 h3{display:none!important}
+			.woocommerce-checkout .woocommerce-additional-fields:empty{display:none!important}
+		</style>
+		<?php
+	}
+
 	public function sync_unique_stock_after_reduction( $order ) {
 		if ( ! $order instanceof WC_Order ) return;
 		$this->sync_unique_items_of_order( $order );
 	}
 
-	/** Llamada cuando el pedido está pagado */
 	public function sync_unique_stock_on_paid( $order_id ) {
 		$order = is_numeric( $order_id ) ? wc_get_order( $order_id ) : ( $order_id instanceof WC_Order ? $order_id : null );
 		if ( ! $order ) return;
 		$this->sync_unique_items_of_order( $order );
 	}
 
-	/** Asegura outofstock + limpia caché para obras únicas con qty<=0 */
 	private function sync_unique_items_of_order( WC_Order $order ) {
 		foreach ( $order->get_items() as $item ) {
 			$p = $item->get_product();
 			if ( ! $p instanceof WC_Product ) continue;
 			if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) continue;
-
 			$qty = (int) $p->get_stock_quantity();
 			if ( $qty <= 0 ) {
 				$p->set_stock_quantity( 0 );
 				$p->set_stock_status( 'outofstock' );
 				$p->save();
-				if ( function_exists( 'wc_delete_product_transients' ) ) {
-					wc_delete_product_transients( $p->get_id() );
-				}
+				if ( function_exists( 'wc_delete_product_transients' ) ) wc_delete_product_transients( $p->get_id() );
 				clean_post_cache( $p->get_id() );
 			}
 		}
 	}
 }
 
-endif; // class_exists
+endif;
 
-/**
- * Subclase de producto.
- */
 add_action( 'plugins_loaded', function () {
 	if ( class_exists( 'WC_Product_Simple' ) && ! class_exists( 'WC_Product_FCSD_Obra_Unica' ) ) {
 		class WC_Product_FCSD_Obra_Unica extends WC_Product_Simple {
