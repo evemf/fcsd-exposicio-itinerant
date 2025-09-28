@@ -27,7 +27,7 @@ class FCSD_Core {
 	const NONCE_BUY       = 'fcsd_expo_buy';
 	const SESSION_GW      = 'fcsd_expo_chosen_gateway';
 
-	const VERSION         = '1.0.0';
+	const VERSION         = '1.0.1';
 
 	private static $instance = null;
 
@@ -41,7 +41,12 @@ class FCSD_Core {
 		$this->url  = defined('FCSD_EXPO_URL')  ? FCSD_EXPO_URL  : plugin_dir_url( $this->file );
 
 		add_action( 'plugins_loaded', [ $this, 'load_textdomain' ] );
-		add_action( 'init', [ $this, 'ensure_product_type_term' ] );
+
+		// Crea el término de product_type cuando WooCommerce ya ha registrado la taxonomía.
+		add_action( 'init', [ $this, 'ensure_product_type_term' ], 20 );
+
+		// Si en la activación la taxonomía no existía, lo dejamos diferido para el primer init disponible.
+		add_action( 'init', [ $this, 'maybe_complete_deferred_setup' ], 20 );
 	}
 
 	public static function instance() : self {
@@ -49,17 +54,79 @@ class FCSD_Core {
 		return self::$instance;
 	}
 
+	/**
+	 * Activación del plugin: crea landing, intenta crear el término si la taxonomía ya existe,
+	 * y si no existe aún (p. ej. por orden de carga), lo difiere para el siguiente init.
+	 */
 	public static function activate() : void {
-		self::instance()->ensure_product_type_term();
+		$self = self::instance();
+
+		// Crea la landing si no existe.
+		$self->ensure_landing_page_exists();
+
+		// Intenta crear el término ahora si la taxonomía está disponible.
+		if ( taxonomy_exists( 'product_type' ) ) {
+			$self->ensure_product_type_term();
+		} else {
+			// Diferir para el primer init en el que esté WooCommerce.
+			add_option( 'fcsd_expo_do_ptype_term', 1, '', false );
+		}
+
+		// Por si la landing afecta a reglas.
+		flush_rewrite_rules();
 	}
 
 	public function load_textdomain() : void {
 		load_plugin_textdomain( 'fcsd-exposicio', false, dirname( plugin_basename( $this->file ) ) . '/languages' );
 	}
 
+	/**
+	 * Crea el término del tipo de producto si no existe (solo si la taxonomía está registrada).
+	 */
 	public function ensure_product_type_term() : void {
-		if ( ! term_exists( self::PRODUCT_TYPE, 'product_type' ) ) {
-			wp_insert_term( __( "Obra d’art única", 'fcsd-exposicio' ), 'product_type', [ 'slug' => self::PRODUCT_TYPE ] );
+		if ( ! taxonomy_exists( 'product_type' ) ) return;
+
+		$slug = self::PRODUCT_TYPE;
+
+		// Si ya existe, nada que hacer.
+		if ( term_exists( $slug, 'product_type' ) ) return;
+
+		wp_insert_term(
+			__( "Obra d’art única", 'fcsd-exposicio' ),
+			'product_type',
+			[ 'slug' => $slug ]
+		);
+	}
+
+	/**
+	 * Completa tareas que pudieron diferirse en activate() por orden de carga.
+	 */
+	public function maybe_complete_deferred_setup() : void {
+		if ( get_option( 'fcsd_expo_do_ptype_term' ) ) {
+			$this->ensure_product_type_term();
+			delete_option( 'fcsd_expo_do_ptype_term' );
+		}
+	}
+
+	/**
+	 * Asegura que la página de landing exista y la etiqueta en el idioma (si Polylang está disponible).
+	 */
+	private function ensure_landing_page_exists() : void {
+		$page = get_page_by_path( self::LANDING_LOCALE . '/' . self::LANDING_SLUG ) ?: get_page_by_path( self::LANDING_SLUG );
+		if ( $page ) return;
+
+		$postarr = [
+			'post_title'   => __( 'Exposició itinerant', 'fcsd-exposicio' ),
+			'post_name'    => self::LANDING_SLUG,
+			'post_content' => '',
+			'post_status'  => 'publish',
+			'post_type'    => 'page',
+		];
+
+		$page_id = wp_insert_post( $postarr, true );
+
+		if ( ! is_wp_error( $page_id ) && function_exists( 'pll_set_post_language' ) ) {
+			pll_set_post_language( $page_id, self::LANDING_LOCALE );
 		}
 	}
 
@@ -75,12 +142,17 @@ class FCSD_Core {
 		return $page ? (int) $page->ID : 0;
 	}
 
+	/**
+	 * Genera un enlace de compra directa para una obra única.
+	 */
 	public function buy_link( WC_Product $product, string $which, string $label, string $extra_class = '' ) : string {
 		$url = add_query_arg( [
 			'add-to-cart' => $product->get_id(),
 			'fcsd_gw'     => $which,
-			'_wpnonce'    => wp_create_nonce( self::NONCE_BUY ),
+			'_wpnonce'    => wp_create_nonce( 'add_to_cart' ),
+			'fcsd_nonce'  => wp_create_nonce( self::NONCE_BUY ),
 		], wc_get_checkout_url() );
+
 		return sprintf(
 			'<a class="fcsd-btn %s" href="%s">%s</a>',
 			esc_attr( $extra_class ),
@@ -89,7 +161,9 @@ class FCSD_Core {
 		);
 	}
 
-	/** Normaliza restricciones de stock para obras únicas (sin “revivir” agotados) */
+	/**
+	 * Normaliza restricciones de stock para obras únicas (sin “revivir” agotados).
+	 */
 	public function normalize_unique_stock( array $ids ) : void {
 		foreach ( $ids as $pid ) {
 			$p = wc_get_product( $pid );
@@ -101,6 +175,7 @@ class FCSD_Core {
 			if ( $p->get_manage_stock() !== 'yes' && $p->get_manage_stock() !== true ) { $p->set_manage_stock( true ); $changed = true; }
 			if ( $p->get_backorders() !== 'no' ) { $p->set_backorders( 'no' ); $changed = true; }
 			if ( ! $p->is_sold_individually() ) { $p->set_sold_individually( true ); $changed = true; }
+			if ( ! $p->get_virtual() ) { $p->set_virtual( true ); $changed = true; }
 
 			$qty_raw = $p->get_stock_quantity();
 			$qty     = ( $qty_raw === '' || $qty_raw === null ) ? 0 : (int) $qty_raw;

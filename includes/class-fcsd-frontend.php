@@ -78,9 +78,9 @@ class FCSD_Frontend {
 
 	public function maybe_apply_gateway_choice() {
 		if ( is_admin() || ! function_exists( 'is_checkout' ) || ! is_checkout() ) return;
-		$choice = isset( $_GET['fcsd_gw'] ) ? sanitize_text_field( wp_unslash( $_GET['fcsd_gw'] ) ) : '';
-		if ( ! $choice ) return;
-		if ( ! wp_verify_nonce( $_GET['_wpnonce'] ?? '', FCSD_Core::NONCE_BUY ) ) return;
+                $choice = isset( $_GET['fcsd_gw'] ) ? sanitize_text_field( wp_unslash( $_GET['fcsd_gw'] ) ) : '';
+                if ( ! $choice ) return;
+                if ( ! wp_verify_nonce( $_GET['fcsd_nonce'] ?? '', FCSD_Core::NONCE_BUY ) ) return;
 
 		$map = [
 			'default' => get_option( FCSD_Core::OPT_GW_DEFAULT, '' ),
