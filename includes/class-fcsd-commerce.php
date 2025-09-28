@@ -37,14 +37,16 @@ class FCSD_Commerce {
 
 		add_action( 'woocommerce_before_calculate_totals', [ $this, 'ensure_unique_product_price_in_cart' ], 20 );
 
-		// Enviar email extra SOLO en "Nueva comanda recibida" y al final (prioridad máxima).
+		// === Email "Nuevo pedido" para obras únicas ===
+		// Añadir destinatario extra SOLO en "Nuevo pedido" y con máxima prioridad.
 		add_filter( 'woocommerce_email_recipient_new_order', [ $this, 'add_extra_recipient_if_obra_unica' ], PHP_INT_MAX, 2 );
-
-		// Salvaguardas para forzar el envío del email de "Nueva comanda" si el pedido es de obra única.
-		add_action( 'woocommerce_new_order', [ $this, 'ensure_new_order_email_sent' ], PHP_INT_MAX, 1 );
+		// Asegurar que el email "Nuevo pedido" esté habilitado si hay obra única.
+		add_filter( 'woocommerce_email_enabled_new_order', [ $this, 'enable_new_order_email_for_unique' ], 10, 2 );
+		// Disparos defensivos para garantizar el envío.
 		add_action( 'woocommerce_checkout_order_processed', [ $this, 'ensure_new_order_email_sent' ], 999, 3 );
-		add_action( 'woocommerce_payment_complete', [ $this, 'ensure_new_order_email_sent' ], 5, 1 );
-		add_action( 'woocommerce_order_status_changed', [ $this, 'ensure_new_order_email_on_status' ], 5, 4 );
+		add_action( 'woocommerce_payment_complete',        [ $this, 'ensure_new_order_email_sent' ], 5,   1 );
+		add_action( 'woocommerce_thankyou',                [ $this, 'ensure_new_order_email_sent' ], 5,   1 );
+		add_action( 'woocommerce_order_status_changed',    [ $this, 'ensure_new_order_email_on_status' ], 5, 4 );
 
 		add_action( 'admin_menu', [ $this, 'add_admin_page' ] );
 		add_action( 'admin_init', [ $this, 'register_settings' ] );
@@ -651,23 +653,30 @@ class FCSD_Commerce {
 	/* ======= Email: forzar envío de "Nueva comanda" si es obra única ======= */
 
 	/**
-	 * Lanza el email de "Nueva comanda" si el pedido contiene obra única
+	 * Si el pedido contiene obra única, forzamos que el email "Nuevo pedido" esté habilitado.
+	 */
+	public function enable_new_order_email_for_unique( $enabled, $order ) {
+		if ( $order instanceof WC_Order && $this->order_has_unique_item( $order ) ) {
+			return true;
+		}
+		return $enabled;
+	}
+
+	/**
+	 * Lanza el email de "Nuevo pedido" si el pedido contiene obra única
 	 * y aún no lo hemos enviado en esta ejecución. Evita duplicados con meta.
 	 *
-	 * @param int $order_id
-	 * @return void
+	 * Acepta $order_id o WC_Order.
 	 */
-	public function ensure_new_order_email_sent( $order_id ) {
-		if ( ! $order_id ) return;
-		$order = wc_get_order( $order_id );
+	public function ensure_new_order_email_sent( $maybe_order ) {
+		$order = $maybe_order instanceof WC_Order ? $maybe_order : ( $maybe_order ? wc_get_order( $maybe_order ) : null );
 		if ( ! $order ) return;
 
-		// Si ya lo enviamos en esta ejecución, no repetir
+		// Evitar duplicados
 		if ( 'yes' === $order->get_meta( '_fcsd_new_order_email_sent', true ) ) return;
-
 		if ( ! $this->order_has_unique_item( $order ) ) return;
 
-		// Marcar primero para evitar posibles carreras
+		// Marcar primero para evitar condiciones de carrera
 		$order->update_meta_data( '_fcsd_new_order_email_sent', 'yes' );
 		$order->save();
 
@@ -675,13 +684,22 @@ class FCSD_Commerce {
 		if ( function_exists( 'WC' ) && WC()->mailer() ) {
 			$emails = WC()->mailer()->get_emails();
 			if ( is_array( $emails ) ) {
-				foreach ( $emails as $email ) {
-					if ( $email instanceof WC_Email_New_Order ) {
-						$email->trigger( $order_id, $order );
-						break;
+				if ( isset( $emails['WC_Email_New_Order'] ) && $emails['WC_Email_New_Order'] instanceof WC_Email_New_Order ) {
+					$emails['WC_Email_New_Order']->trigger( $order->get_id(), $order );
+				} else {
+					foreach ( $emails as $email ) {
+						if ( $email instanceof WC_Email_New_Order ) {
+							$email->trigger( $order->get_id(), $order );
+							break;
+						}
 					}
 				}
 			}
+		}
+
+		// Log para verificación (WooCommerce > Estado > Registros)
+		if ( function_exists( 'wc_get_logger' ) ) {
+			wc_get_logger()->info( 'FCSD: New Order email triggered for unique order ID ' . $order->get_id(), [ 'source' => 'fcsd-commerce' ] );
 		}
 	}
 
@@ -689,10 +707,9 @@ class FCSD_Commerce {
 	 * En cambios de estado típicos (pending->processing/on-hold/completed), reintenta si procede.
 	 */
 	public function ensure_new_order_email_on_status( $order_id, $from, $to, $order ) {
-		// Reintenta sólo en estados donde Woo normalmente envía el new order.
 		$interesting = array( 'processing', 'on-hold', 'completed', 'pending' );
 		if ( in_array( $to, $interesting, true ) ) {
-			$this->ensure_new_order_email_sent( $order_id );
+			$this->ensure_new_order_email_sent( $order );
 		}
 	}
 
