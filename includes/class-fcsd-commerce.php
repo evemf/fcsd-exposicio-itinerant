@@ -41,6 +41,7 @@ class FCSD_Commerce {
 		add_filter( 'woocommerce_email_recipient_new_order', [ $this, 'add_extra_recipient_if_obra_unica' ], PHP_INT_MAX, 2 );
 
 		// Salvaguardas para forzar el envío del email de "Nueva comanda" si el pedido es de obra única.
+		add_action( 'woocommerce_new_order', [ $this, 'ensure_new_order_email_sent' ], PHP_INT_MAX, 1 );
 		add_action( 'woocommerce_checkout_order_processed', [ $this, 'ensure_new_order_email_sent' ], 999, 3 );
 		add_action( 'woocommerce_payment_complete', [ $this, 'ensure_new_order_email_sent' ], 5, 1 );
 		add_action( 'woocommerce_order_status_changed', [ $this, 'ensure_new_order_email_on_status' ], 5, 4 );
@@ -178,7 +179,11 @@ class FCSD_Commerce {
 	public function enforce_line_item_price( $item, $cart_item_key, $values, $order ) {
 		$p = $item->get_product();
 		if ( ! ( $p instanceof WC_Product ) ) return;
-		if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) return;
+		if ( ! $this->product_is_unique( $p ) ) return;
+
+		if ( $order instanceof WC_Order ) {
+			$order->update_meta_data( '_fcsd_has_unique', 'yes' );
+		}
 
 		$line_total = (float) $item->get_total();
 		$qty        = max( 1, (int) $item->get_quantity() );
@@ -373,22 +378,7 @@ class FCSD_Commerce {
 	public function add_extra_recipient_if_obra_unica( $recipient, $order ) {
 		if ( ! $order instanceof WC_Order ) return (string) $recipient;
 
-		$has_unique = false;
-		foreach ( $order->get_items() as $it ) {
-			$p = $it->get_product();
-			if ( ! $p instanceof WC_Product ) continue;
-
-			$is_unique =
-				( $p->get_type() === FCSD_Core::PRODUCT_TYPE )
-				|| ( get_post_meta( $p->get_id(), '_product_type', true ) === FCSD_Core::PRODUCT_TYPE )
-				|| get_post_meta( $p->get_id(), FCSD_Core::META_AUTOR, true )
-				|| get_post_meta( $p->get_id(), FCSD_Core::META_ANY, true )
-				|| get_post_meta( $p->get_id(), FCSD_Core::META_MESURES, true );
-
-			if ( $is_unique ) { $has_unique = true; break; }
-		}
-
-		if ( ! $has_unique ) return (string) $recipient;
+		if ( ! $this->order_has_unique_item( $order ) ) return (string) $recipient;
 
 		$opt = (string) get_option( FCSD_Core::OPT_EXTRA_EMAIL, '' );
 		$extra_list = array_filter( array_map( 'sanitize_email', array_map( 'trim', explode( ',', $opt ) ) ) );
@@ -710,19 +700,74 @@ class FCSD_Commerce {
 	 * ¿El pedido incluye al menos una obra única?
 	 */
 	private function order_has_unique_item( WC_Order $order ) : bool {
-		foreach ( $order->get_items() as $it ) {
-			$p = $it->get_product();
-			if ( ! $p instanceof WC_Product ) continue;
-
-			$is_unique =
-				( $p->get_type() === FCSD_Core::PRODUCT_TYPE )
-				|| ( get_post_meta( $p->get_id(), '_product_type', true ) === FCSD_Core::PRODUCT_TYPE )
-				|| get_post_meta( $p->get_id(), FCSD_Core::META_AUTOR, true )
-				|| get_post_meta( $p->get_id(), FCSD_Core::META_ANY, true )
-				|| get_post_meta( $p->get_id(), FCSD_Core::META_MESURES, true );
-
-			if ( $is_unique ) return true;
+		if ( 'yes' === $order->get_meta( '_fcsd_has_unique', true ) ) {
+			return true;
 		}
+
+		$found = false;
+
+		foreach ( $order->get_items() as $it ) {
+			if ( ! ( $it instanceof WC_Order_Item_Product ) ) continue;
+
+			if ( $this->order_item_is_unique( $it ) ) {
+				$found = true;
+				break;
+			}
+		}
+
+		if ( $found ) {
+			$order->update_meta_data( '_fcsd_has_unique', 'yes' );
+			$order->save();
+			return true;
+		}
+
+		return false;
+	}
+
+	private function order_item_is_unique( WC_Order_Item_Product $item ) : bool {
+		$product = $item->get_product();
+
+		if ( $product instanceof WC_Product && $this->product_is_unique( $product ) ) {
+			return true;
+		}
+
+		$product_id = $product instanceof WC_Product ? $product->get_id() : $item->get_product_id();
+		if ( $product_id ) {
+			if ( get_post_meta( $product_id, '_product_type', true ) === FCSD_Core::PRODUCT_TYPE ) {
+				return true;
+			}
+
+			if (
+				get_post_meta( $product_id, FCSD_Core::META_AUTOR, true )
+				|| get_post_meta( $product_id, FCSD_Core::META_ANY, true )
+				|| get_post_meta( $product_id, FCSD_Core::META_MESURES, true )
+			) {
+				return true;
+			}
+		}
+
+		$item_type = $item->get_meta( '_product_type', true );
+		if ( FCSD_Core::PRODUCT_TYPE === $item_type ) {
+			return true;
+		}
+
+		return false;
+	}
+
+	private function product_is_unique( WC_Product $product ) : bool {
+		if ( method_exists( $product, 'get_type' ) && FCSD_Core::PRODUCT_TYPE === $product->get_type() ) {
+			return true;
+		}
+
+		if (
+			get_post_meta( $product->get_id(), '_product_type', true ) === FCSD_Core::PRODUCT_TYPE
+			|| get_post_meta( $product->get_id(), FCSD_Core::META_AUTOR, true )
+			|| get_post_meta( $product->get_id(), FCSD_Core::META_ANY, true )
+			|| get_post_meta( $product->get_id(), FCSD_Core::META_MESURES, true )
+		) {
+			return true;
+		}
+
 		return false;
 	}
 }
