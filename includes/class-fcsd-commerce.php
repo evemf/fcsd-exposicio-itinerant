@@ -238,32 +238,89 @@ class FCSD_Commerce {
 		}
 	}
 
-	public function force_type_after_product_object_save( $product, $data_store ) {
-		$id = $product instanceof WC_Product ? $product->get_id() : 0;
-		if ( ! $id ) return;
-		$this->force_product_type_now( $id );
-	}
-
-	public function force_type_on_save_post( $post_id, $post, $update ) {
-		if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) return;
-		if ( 'product' !== $post->post_type ) return;
-		$this->force_product_type_now( $post_id );
-	}
-
-	public function force_type_on_quick_edit( $product ) {
-		if ( $product instanceof WC_Product ) $this->force_product_type_now( $product->get_id() );
-	}
-
-	private function force_product_type_now( $product_id ) : void {
-        if ( ! term_exists( FCSD_Core::PRODUCT_TYPE, 'product_type' ) ) {
-                wp_insert_term( __( "Obra d’art única", 'fcsd-exposicio' ), 'product_type', [ 'slug' => FCSD_Core::PRODUCT_TYPE ] );
+        public function force_type_after_product_object_save( $product, $data_store ) {
+                $id = $product instanceof WC_Product ? $product->get_id() : 0;
+                if ( ! $id ) return;
+                if ( ! $this->should_treat_as_unique( $id, $product ) ) return;
+                $this->force_product_type_now( $id );
         }
-        wp_set_object_terms( $product_id, FCSD_Core::PRODUCT_TYPE, 'product_type', false );
-        update_post_meta( $product_id, '_product_type', FCSD_Core::PRODUCT_TYPE );
-        update_post_meta( $product_id, '_virtual', 'yes' );
-        if ( function_exists( 'wc_delete_product_transients' ) ) wc_delete_product_transients( $product_id );
-        clean_post_cache( $product_id );
-    }
+
+        public function force_type_on_save_post( $post_id, $post, $update ) {
+                if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) return;
+                if ( 'product' !== $post->post_type ) return;
+                if ( ! $this->should_treat_as_unique( $post_id ) ) return;
+                $this->force_product_type_now( $post_id );
+        }
+
+        public function force_type_on_quick_edit( $product ) {
+                if ( ! ( $product instanceof WC_Product ) ) return;
+                if ( ! $this->should_treat_as_unique( $product->get_id(), $product ) ) return;
+                $this->force_product_type_now( $product->get_id() );
+        }
+
+        private function force_product_type_now( $product_id ) : void {
+                if ( ! term_exists( FCSD_Core::PRODUCT_TYPE, 'product_type' ) ) {
+                        wp_insert_term( __( "Obra d’art única", 'fcsd-exposicio' ), 'product_type', [ 'slug' => FCSD_Core::PRODUCT_TYPE ] );
+                }
+                wp_set_object_terms( $product_id, FCSD_Core::PRODUCT_TYPE, 'product_type', false );
+                update_post_meta( $product_id, '_product_type', FCSD_Core::PRODUCT_TYPE );
+                update_post_meta( $product_id, '_virtual', 'yes' );
+                if ( function_exists( 'wc_delete_product_transients' ) ) wc_delete_product_transients( $product_id );
+                clean_post_cache( $product_id );
+        }
+
+        private function should_treat_as_unique( $product_id = 0, $product = null ) : bool {
+                $posted_type = isset( $_POST['product-type'] ) ? sanitize_text_field( wp_unslash( $_POST['product-type'] ) ) : '';
+                if ( $posted_type === FCSD_Core::PRODUCT_TYPE ) {
+                        return true;
+                }
+
+                if ( isset( $_POST['_fcsd_force_unique'] ) && '1' === $_POST['_fcsd_force_unique'] ) {
+                        return true;
+                }
+
+                if ( isset( $_POST[ FCSD_Core::META_AUTOR ] ) && $_POST[ FCSD_Core::META_AUTOR ] !== '' ) {
+                        return true;
+                }
+
+                if ( isset( $_POST[ FCSD_Core::META_ANY ] ) && $_POST[ FCSD_Core::META_ANY ] !== '' ) {
+                        return true;
+                }
+
+                if ( isset( $_POST[ FCSD_Core::META_MESURES ] ) && $_POST[ FCSD_Core::META_MESURES ] !== '' ) {
+                        return true;
+                }
+
+                if ( ! ( $product instanceof WC_Product ) && $product_id ) {
+                        $product = wc_get_product( $product_id );
+                }
+
+                if ( $product instanceof WC_Product ) {
+                        if ( $this->product_is_unique( $product ) ) {
+                                return true;
+                        }
+                }
+
+                if ( $product_id ) {
+                        if ( has_term( FCSD_Core::PRODUCT_TYPE, 'product_type', $product_id ) ) {
+                                return true;
+                        }
+
+                        if ( get_post_meta( $product_id, '_product_type', true ) === FCSD_Core::PRODUCT_TYPE ) {
+                                return true;
+                        }
+
+                        if (
+                                get_post_meta( $product_id, FCSD_Core::META_AUTOR, true )
+                                || get_post_meta( $product_id, FCSD_Core::META_ANY, true )
+                                || get_post_meta( $product_id, FCSD_Core::META_MESURES, true )
+                        ) {
+                                return true;
+                        }
+                }
+
+                return false;
+        }
 
 	public function admin_js_show_price_for_obra_unica() {
 		$screen = function_exists('get_current_screen') ? get_current_screen() : null;
