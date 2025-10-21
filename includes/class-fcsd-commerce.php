@@ -15,7 +15,7 @@ class FCSD_Commerce {
 		add_action( 'woocommerce_product_data_panels', [ $this, 'render_product_data_panel' ] );
 		add_action( 'woocommerce_admin_process_product_object', [ $this, 'save_meta_and_lock_stock' ] );
 		add_action( 'woocommerce_process_product_meta', [ $this, 'save_meta_legacy' ] );
-        add_action( 'woocommerce_checkout_create_order_line_item', [ $this, 'enforce_line_item_price' ], 20, 4 );
+	add_action( 'woocommerce_checkout_create_order_line_item', [ $this, 'enforce_line_item_price' ], 20, 4 );
 
 		add_action( 'admin_init', [ $this, 'force_request_product_type_early' ], 0 );
 
@@ -139,12 +139,20 @@ class FCSD_Commerce {
 	}
 
 	public function save_meta_and_lock_stock( $product ) {
-		$posted_type = isset($_POST['product-type']) ? sanitize_text_field( wp_unslash($_POST['product-type']) ) : '';
+		$posted_type = $this->get_requested_product_type();
 		$has_fields  = ( ! empty($_POST[FCSD_Core::META_AUTOR]) || ! empty($_POST[FCSD_Core::META_ANY]) || ! empty($_POST[FCSD_Core::META_MESURES]) );
-		if ( $posted_type !== FCSD_Core::PRODUCT_TYPE && ! $has_fields ) return;
+		$panel_flag  = isset($_POST['_fcsd_force_unique']) && $_POST['_fcsd_force_unique'] === '1';
+
+		if ( $posted_type && $posted_type !== FCSD_Core::PRODUCT_TYPE ) {
+			return;
+		}
+
+		if ( ! $panel_flag && ! $has_fields && $posted_type !== FCSD_Core::PRODUCT_TYPE ) {
+			return;
+		}
 
 		if ( isset( $_POST[ FCSD_Core::META_AUTOR ] ) )   $product->update_meta_data( FCSD_Core::META_AUTOR,   sanitize_text_field( wp_unslash( $_POST[ FCSD_Core::META_AUTOR ] ) ) );
-		if ( isset( $_POST[ FCSD_Core::META_ANY ] ) )     $product->update_meta_data( FCSD_Core::META_ANY,     intval( $_POST[ FCSD_Core::META_ANY ] ) );
+		if ( isset( $_POST[ FCSD_Core::META_ANY ] ) )     $product->update_meta_data( FCSD_Core::META_ANY,     intval( wp_unslash( $_POST[ FCSD_Core::META_ANY ] ) ) );
 		if ( isset( $_POST[ FCSD_Core::META_MESURES ] ) ) $product->update_meta_data( FCSD_Core::META_MESURES, sanitize_text_field( wp_unslash( $_POST[ FCSD_Core::META_MESURES ] ) ) );
 
 		if ( isset($_POST['_regular_price']) ) $product->set_regular_price( wc_clean( wp_unslash( $_POST['_regular_price'] ) ) );
@@ -152,11 +160,11 @@ class FCSD_Commerce {
 		$price = $product->get_sale_price() !== '' ? $product->get_sale_price() : $product->get_regular_price();
 		if ( $price !== '' ) $product->set_price( $price );
 
-        $product->set_manage_stock( true );
-        $product->set_backorders( 'no' );
-        $product->set_sold_individually( true );
-        $product->set_catalog_visibility( 'hidden' );
-        $product->set_virtual( true );
+		$product->set_manage_stock( true );
+		$product->set_backorders( 'no' );
+		$product->set_sold_individually( true );
+		$product->set_catalog_visibility( 'hidden' );
+		$product->set_virtual( true );
 
 		$posted_qty = isset($_POST['_stock']) ? wc_stock_amount( wp_unslash( $_POST['_stock'] ) ) : null;
 		$qty = $posted_qty !== null ? (int) $posted_qty : (int) $product->get_stock_quantity();
@@ -174,7 +182,7 @@ class FCSD_Commerce {
 
 	public function save_meta_legacy( $post_id ) {
 		if ( isset( $_POST[ FCSD_Core::META_AUTOR ] ) )   update_post_meta( $post_id, FCSD_Core::META_AUTOR,   sanitize_text_field( wp_unslash( $_POST[ FCSD_Core::META_AUTOR ] ) ) );
-		if ( isset( $_POST[ FCSD_Core::META_ANY ] ) )     update_post_meta( $post_id, FCSD_Core::META_ANY,     intval( $_POST[ FCSD_Core::META_ANY ] ) );
+		if ( isset( $_POST[ FCSD_Core::META_ANY ] ) )     update_post_meta( $post_id, FCSD_Core::META_ANY,     intval( wp_unslash( $_POST[ FCSD_Core::META_ANY ] ) ) );
 		if ( isset( $_POST[ FCSD_Core::META_MESURES ] ) ) update_post_meta( $post_id, FCSD_Core::META_MESURES, sanitize_text_field( wp_unslash( $_POST[ FCSD_Core::META_MESURES ] ) ) );
 	}
 
@@ -208,10 +216,14 @@ class FCSD_Commerce {
 		if ( ! isset($_POST['post_type']) || $_POST['post_type'] !== 'product' ) return;
 		$nonce = isset($_POST['woocommerce_meta_nonce']) ? $_POST['woocommerce_meta_nonce'] : '';
 		if ( ! $nonce || ! wp_verify_nonce( $nonce, 'woocommerce_save_data' ) ) return;
-		$posted_type = isset($_POST['product-type']) ? sanitize_text_field( wp_unslash($_POST['product-type']) ) : '';
-		$has_fields  = ( ! empty($_POST[FCSD_Core::META_AUTOR]) || ! empty($_POST[FCSD_Core::META_ANY]) || ! empty($_POST[FCSD_Core::META_MESURES]) );
-		$panel_flag  = isset($_POST['_fcsd_force_unique']) && $_POST['_fcsd_force_unique'] === '1';
-		if ( $posted_type === FCSD_Core::PRODUCT_TYPE || $has_fields || $panel_flag ) {
+		$posted_type = $this->get_requested_product_type();
+		if ( $posted_type && $posted_type !== FCSD_Core::PRODUCT_TYPE ) {
+			return;
+		}
+		$has_fields = ( ! empty($_POST[FCSD_Core::META_AUTOR]) || ! empty($_POST[FCSD_Core::META_ANY]) || ! empty($_POST[FCSD_Core::META_MESURES]) );
+		$panel_flag = isset($_POST['_fcsd_force_unique']) && $_POST['_fcsd_force_unique'] === '1';
+
+		if ( $posted_type === FCSD_Core::PRODUCT_TYPE || ( ! $posted_type && ( $has_fields || $panel_flag ) ) ) {
 			$_POST['product-type'] = FCSD_Core::PRODUCT_TYPE;
 		}
 	}
@@ -221,11 +233,6 @@ class FCSD_Commerce {
 		if ( has_term( FCSD_Core::PRODUCT_TYPE, 'product_type', $product_id ) ) return FCSD_Core::PRODUCT_TYPE;
 		$meta_type = get_post_meta( $product_id, '_product_type', true );
 		if ( $meta_type === FCSD_Core::PRODUCT_TYPE ) return FCSD_Core::PRODUCT_TYPE;
-		if ( get_post_meta( $product_id, FCSD_Core::META_AUTOR, true )
-		  || get_post_meta( $product_id, FCSD_Core::META_ANY, true )
-		  || get_post_meta( $product_id, FCSD_Core::META_MESURES, true ) ) {
-			return FCSD_Core::PRODUCT_TYPE;
-		}
 		return $type;
 	}
 
@@ -238,89 +245,116 @@ class FCSD_Commerce {
 		}
 	}
 
-        public function force_type_after_product_object_save( $product, $data_store ) {
-                $id = $product instanceof WC_Product ? $product->get_id() : 0;
-                if ( ! $id ) return;
-                if ( ! $this->should_treat_as_unique( $id, $product ) ) return;
-                $this->force_product_type_now( $id );
-        }
+	public function force_type_after_product_object_save( $product, $data_store ) {
+		$id = $product instanceof WC_Product ? $product->get_id() : 0;
+		if ( ! $id ) return;
+		if ( $this->should_treat_as_unique( $id, $product ) ) {
+			$this->force_product_type_now( $id );
+		} elseif ( $this->request_is_explicitly_non_unique() ) {
+			$this->clear_unique_product_type( $id );
+		}
+	}
 
-        public function force_type_on_save_post( $post_id, $post, $update ) {
-                if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) return;
-                if ( 'product' !== $post->post_type ) return;
-                if ( ! $this->should_treat_as_unique( $post_id ) ) return;
-                $this->force_product_type_now( $post_id );
-        }
+	public function force_type_on_save_post( $post_id, $post, $update ) {
+		if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) return;
+		if ( 'product' !== $post->post_type ) return;
+		if ( $this->should_treat_as_unique( $post_id ) ) {
+			$this->force_product_type_now( $post_id );
+		} elseif ( $this->request_is_explicitly_non_unique() ) {
+			$this->clear_unique_product_type( $post_id );
+		}
+	}
 
-        public function force_type_on_quick_edit( $product ) {
-                if ( ! ( $product instanceof WC_Product ) ) return;
-                if ( ! $this->should_treat_as_unique( $product->get_id(), $product ) ) return;
-                $this->force_product_type_now( $product->get_id() );
-        }
+	public function force_type_on_quick_edit( $product ) {
+		if ( ! ( $product instanceof WC_Product ) ) return;
+		if ( $this->should_treat_as_unique( $product->get_id(), $product ) ) {
+			$this->force_product_type_now( $product->get_id() );
+		} elseif ( $this->request_is_explicitly_non_unique() ) {
+			$this->clear_unique_product_type( $product->get_id() );
+		}
+	}
 
-        private function force_product_type_now( $product_id ) : void {
-                if ( ! term_exists( FCSD_Core::PRODUCT_TYPE, 'product_type' ) ) {
-                        wp_insert_term( __( "Obra d’art única", 'fcsd-exposicio' ), 'product_type', [ 'slug' => FCSD_Core::PRODUCT_TYPE ] );
-                }
-                wp_set_object_terms( $product_id, FCSD_Core::PRODUCT_TYPE, 'product_type', false );
-                update_post_meta( $product_id, '_product_type', FCSD_Core::PRODUCT_TYPE );
-                update_post_meta( $product_id, '_virtual', 'yes' );
-                if ( function_exists( 'wc_delete_product_transients' ) ) wc_delete_product_transients( $product_id );
-                clean_post_cache( $product_id );
-        }
+	private function force_product_type_now( $product_id ) : void {
+		if ( ! term_exists( FCSD_Core::PRODUCT_TYPE, 'product_type' ) ) {
+			wp_insert_term( __( "Obra d’art única", 'fcsd-exposicio' ), 'product_type', [ 'slug' => FCSD_Core::PRODUCT_TYPE ] );
+		}
+		wp_set_object_terms( $product_id, FCSD_Core::PRODUCT_TYPE, 'product_type', false );
+		update_post_meta( $product_id, '_product_type', FCSD_Core::PRODUCT_TYPE );
+		update_post_meta( $product_id, '_virtual', 'yes' );
+		if ( function_exists( 'wc_delete_product_transients' ) ) wc_delete_product_transients( $product_id );
+		clean_post_cache( $product_id );
+	}
 
-        private function should_treat_as_unique( $product_id = 0, $product = null ) : bool {
-                $posted_type = isset( $_POST['product-type'] ) ? sanitize_text_field( wp_unslash( $_POST['product-type'] ) ) : '';
-                if ( $posted_type === FCSD_Core::PRODUCT_TYPE ) {
-                        return true;
-                }
+	private function clear_unique_product_type( $product_id ) : void {
+		wp_remove_object_terms( $product_id, FCSD_Core::PRODUCT_TYPE, 'product_type' );
+		delete_post_meta( $product_id, '_product_type' );
+	}
 
-                if ( isset( $_POST['_fcsd_force_unique'] ) && '1' === $_POST['_fcsd_force_unique'] ) {
-                        return true;
-                }
+	private function should_treat_as_unique( $product_id = 0, $product = null ) : bool {
+		$posted_type = $this->get_requested_product_type();
+		if ( $posted_type && $posted_type !== FCSD_Core::PRODUCT_TYPE ) {
+			return false;
+		}
 
-                if ( isset( $_POST[ FCSD_Core::META_AUTOR ] ) && $_POST[ FCSD_Core::META_AUTOR ] !== '' ) {
-                        return true;
-                }
+		if ( $posted_type === FCSD_Core::PRODUCT_TYPE ) {
+			return true;
+		}
 
-                if ( isset( $_POST[ FCSD_Core::META_ANY ] ) && $_POST[ FCSD_Core::META_ANY ] !== '' ) {
-                        return true;
-                }
+		if ( isset( $_POST['_fcsd_force_unique'] ) && '1' === $_POST['_fcsd_force_unique'] ) {
+			return ! $posted_type;
+		}
 
-                if ( isset( $_POST[ FCSD_Core::META_MESURES ] ) && $_POST[ FCSD_Core::META_MESURES ] !== '' ) {
-                        return true;
-                }
+		if ( isset( $_POST[ FCSD_Core::META_AUTOR ] ) && $_POST[ FCSD_Core::META_AUTOR ] !== '' ) {
+			return true;
+		}
 
-                if ( ! ( $product instanceof WC_Product ) && $product_id ) {
-                        $product = wc_get_product( $product_id );
-                }
+		if ( isset( $_POST[ FCSD_Core::META_ANY ] ) && $_POST[ FCSD_Core::META_ANY ] !== '' ) {
+			return true;
+		}
 
-                if ( $product instanceof WC_Product ) {
-                        if ( $this->product_is_unique( $product ) ) {
-                                return true;
-                        }
-                }
+		if ( isset( $_POST[ FCSD_Core::META_MESURES ] ) && $_POST[ FCSD_Core::META_MESURES ] !== '' ) {
+			return true;
+		}
 
-                if ( $product_id ) {
-                        if ( has_term( FCSD_Core::PRODUCT_TYPE, 'product_type', $product_id ) ) {
-                                return true;
-                        }
+		if ( ! ( $product instanceof WC_Product ) && $product_id ) {
+			$product = wc_get_product( $product_id );
+		}
 
-                        if ( get_post_meta( $product_id, '_product_type', true ) === FCSD_Core::PRODUCT_TYPE ) {
-                                return true;
-                        }
+		if ( $product instanceof WC_Product ) {
+			if ( $this->product_is_unique( $product ) ) {
+				return true;
+			}
+		}
 
-                        if (
-                                get_post_meta( $product_id, FCSD_Core::META_AUTOR, true )
-                                || get_post_meta( $product_id, FCSD_Core::META_ANY, true )
-                                || get_post_meta( $product_id, FCSD_Core::META_MESURES, true )
-                        ) {
-                                return true;
-                        }
-                }
+		if ( $product_id ) {
+			if ( has_term( FCSD_Core::PRODUCT_TYPE, 'product_type', $product_id ) ) {
+				return true;
+			}
 
-                return false;
-        }
+			if ( get_post_meta( $product_id, '_product_type', true ) === FCSD_Core::PRODUCT_TYPE ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private function request_is_explicitly_non_unique() : bool {
+		$posted_type = $this->get_requested_product_type();
+		return (bool) ( $posted_type && $posted_type !== FCSD_Core::PRODUCT_TYPE );
+	}
+
+	private function get_requested_product_type() : string {
+		if ( isset( $_POST['product-type'] ) ) {
+			return sanitize_text_field( wp_unslash( $_POST['product-type'] ) );
+		}
+
+		if ( isset( $_REQUEST['product_type'] ) ) {
+			return sanitize_text_field( wp_unslash( $_REQUEST['product_type'] ) );
+		}
+
+		return '';
+	}
 
 	public function admin_js_show_price_for_obra_unica() {
 		$screen = function_exists('get_current_screen') ? get_current_screen() : null;
@@ -514,64 +548,64 @@ class FCSD_Commerce {
 	}
 
     private function is_unique_checkout_context( bool $strict = true ) : bool {
-            if ( ! function_exists( 'WC' ) ) return false;
+	    if ( ! function_exists( 'WC' ) ) return false;
 
-            $has_unique = false;
+	    $has_unique = false;
 
-            if ( WC()->cart && is_callable( [ WC()->cart, 'get_cart' ] ) ) {
-                    $items = WC()->cart->get_cart();
-                    if ( $items ) {
-                            foreach ( $items as $it ) {
-                                    $p = $it['data'] ?? null;
-                                    if ( ! ( $p instanceof WC_Product ) ) { $has_unique = false; break; }
-                                    if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) { $has_unique = false; break; }
-                                    if ( (int) ( $it['quantity'] ?? 1 ) !== 1 ) { $has_unique = false; break; }
-                                    $has_unique = true;
-                            }
-                    }
-            }
+	    if ( WC()->cart && is_callable( [ WC()->cart, 'get_cart' ] ) ) {
+		    $items = WC()->cart->get_cart();
+		    if ( $items ) {
+			    foreach ( $items as $it ) {
+				    $p = $it['data'] ?? null;
+				    if ( ! ( $p instanceof WC_Product ) ) { $has_unique = false; break; }
+				    if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) { $has_unique = false; break; }
+				    if ( (int) ( $it['quantity'] ?? 1 ) !== 1 ) { $has_unique = false; break; }
+				    $has_unique = true;
+			    }
+		    }
+	    }
 
-            if ( ! $has_unique ) {
-                    $request_id = isset( $_REQUEST['add-to-cart'] ) ? absint( wp_unslash( $_REQUEST['add-to-cart'] ) ) : 0;
-                    if ( ! $request_id && isset( $_REQUEST['product_id'] ) ) {
-                            $request_id = absint( wp_unslash( $_REQUEST['product_id'] ) );
-                    }
-                    if ( $request_id ) {
-                            $p = wc_get_product( $request_id );
-                            if ( $p instanceof WC_Product && $p->get_type() === FCSD_Core::PRODUCT_TYPE ) {
-                                    $has_unique = true;
-                            }
-                    }
-            }
+	    if ( ! $has_unique ) {
+		    $request_id = isset( $_REQUEST['add-to-cart'] ) ? absint( wp_unslash( $_REQUEST['add-to-cart'] ) ) : 0;
+		    if ( ! $request_id && isset( $_REQUEST['product_id'] ) ) {
+			    $request_id = absint( wp_unslash( $_REQUEST['product_id'] ) );
+		    }
+		    if ( $request_id ) {
+			    $p = wc_get_product( $request_id );
+			    if ( $p instanceof WC_Product && $p->get_type() === FCSD_Core::PRODUCT_TYPE ) {
+				    $has_unique = true;
+			    }
+		    }
+	    }
 
-            if ( ! $has_unique && WC()->session && is_callable( [ WC()->session, 'get' ] ) ) {
-                    $session_cart = WC()->session->get( 'cart' );
-                    if ( is_array( $session_cart ) ) {
-                            foreach ( $session_cart as $values ) {
-                                    $pid = isset( $values['product_id'] ) ? (int) $values['product_id'] : 0;
-                                    $qty = isset( $values['quantity'] ) ? (int) $values['quantity'] : 0;
-                                    if ( ! $pid ) continue;
-                                    $p = wc_get_product( $pid );
-                                    if ( ! ( $p instanceof WC_Product ) ) continue;
-                                    if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) { $has_unique = false; break; }
-                                    if ( $qty && $qty !== 1 ) { $has_unique = false; break; }
-                                    $has_unique = true;
-                            }
-                    }
-            }
+	    if ( ! $has_unique && WC()->session && is_callable( [ WC()->session, 'get' ] ) ) {
+		    $session_cart = WC()->session->get( 'cart' );
+		    if ( is_array( $session_cart ) ) {
+			    foreach ( $session_cart as $values ) {
+				    $pid = isset( $values['product_id'] ) ? (int) $values['product_id'] : 0;
+				    $qty = isset( $values['quantity'] ) ? (int) $values['quantity'] : 0;
+				    if ( ! $pid ) continue;
+				    $p = wc_get_product( $pid );
+				    if ( ! ( $p instanceof WC_Product ) ) continue;
+				    if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) { $has_unique = false; break; }
+				    if ( $qty && $qty !== 1 ) { $has_unique = false; break; }
+				    $has_unique = true;
+			    }
+		    }
+	    }
 
-            if ( ! $has_unique ) return false;
+	    if ( ! $has_unique ) return false;
 
-            if ( ! $strict ) return true;
+	    if ( ! $strict ) return true;
 
-            $at_checkout = false;
-            if ( function_exists( 'is_checkout' ) && is_checkout() ) {
-                    $at_checkout = true;
-            } elseif ( isset( $_GET['add-to-cart'] ) && ! empty( $_GET['fcsd_gw'] ) ) {
-                    $at_checkout = true;
-            }
+	    $at_checkout = false;
+	    if ( function_exists( 'is_checkout' ) && is_checkout() ) {
+		    $at_checkout = true;
+	    } elseif ( isset( $_GET['add-to-cart'] ) && ! empty( $_GET['fcsd_gw'] ) ) {
+		    $at_checkout = true;
+	    }
 
-            return $at_checkout;
+	    return $at_checkout;
     }
 
 	/* ======= CHECKOUT SIMPLE (Nombre, Apellidos, Email) ======= */
@@ -642,7 +676,7 @@ class FCSD_Commerce {
 	}
 
     public function unique_force_guest_checkout( $pre ) {
-        return $this->is_unique_checkout_context( false ) ? 'yes' : $pre;
+	return $this->is_unique_checkout_context( false ) ? 'yes' : $pre;
     }
 
 	public function disable_hold_stock_for_unique_checkout_only( $pre ) {
@@ -682,29 +716,29 @@ class FCSD_Commerce {
 	}
 
     private function sync_unique_items_of_order( WC_Order $order ) {
-            foreach ( $order->get_items() as $item ) {
-                    $p = $item->get_product();
-                    if ( ! $p instanceof WC_Product ) continue;
-                    if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) continue;
+	    foreach ( $order->get_items() as $item ) {
+		    $p = $item->get_product();
+		    if ( ! $p instanceof WC_Product ) continue;
+		    if ( $p->get_type() !== FCSD_Core::PRODUCT_TYPE ) continue;
 
-                    $changed = false;
+		    $changed = false;
 
-                    if ( (int) $p->get_stock_quantity() !== 0 ) {
-                            $p->set_stock_quantity( 0 );
-                            $changed = true;
-                    }
+		    if ( (int) $p->get_stock_quantity() !== 0 ) {
+			    $p->set_stock_quantity( 0 );
+			    $changed = true;
+		    }
 
-                    if ( $p->get_stock_status() !== 'outofstock' ) {
-                            $p->set_stock_status( 'outofstock' );
-                            $changed = true;
-                    }
+		    if ( $p->get_stock_status() !== 'outofstock' ) {
+			    $p->set_stock_status( 'outofstock' );
+			    $changed = true;
+		    }
 
-                    if ( $changed ) {
-                            $p->save();
-                            if ( function_exists( 'wc_delete_product_transients' ) ) wc_delete_product_transients( $p->get_id() );
-                            clean_post_cache( $p->get_id() );
-                    }
-            }
+		    if ( $changed ) {
+			    $p->save();
+			    if ( function_exists( 'wc_delete_product_transients' ) ) wc_delete_product_transients( $p->get_id() );
+			    clean_post_cache( $p->get_id() );
+		    }
+	    }
     }
 
 	/* ======= Email: forzar envío de "Nueva comanda" si es obra única ======= */
