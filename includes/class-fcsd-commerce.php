@@ -15,7 +15,7 @@ class FCSD_Commerce {
 		add_action( 'woocommerce_product_data_panels', [ $this, 'render_product_data_panel' ] );
 		add_action( 'woocommerce_admin_process_product_object', [ $this, 'save_meta_and_lock_stock' ] );
 		add_action( 'woocommerce_process_product_meta', [ $this, 'save_meta_legacy' ] );
-	add_action( 'woocommerce_checkout_create_order_line_item', [ $this, 'enforce_line_item_price' ], 20, 4 );
+		add_action( 'woocommerce_checkout_create_order_line_item', [ $this, 'enforce_line_item_price' ], 20, 4 );
 
 		add_action( 'admin_init', [ $this, 'force_request_product_type_early' ], 0 );
 
@@ -87,12 +87,16 @@ class FCSD_Commerce {
 				'priority' => 10,
 			];
 		}
-		$tabs['general']['class'] = isset( $tabs['general']['class'] ) ? (array) $tabs['general']['class'] : [];
-		$tabs['general']['class'][] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
-		if ( isset( $tabs['inventory'] ) ) {
-			$tabs['inventory']['class'] = isset( $tabs['inventory']['class'] ) ? (array) $tabs['inventory']['class'] : [];
-			$tabs['inventory']['class'][] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
-		}
+                $tabs['general']['class'] = isset( $tabs['general']['class'] ) ? (array) $tabs['general']['class'] : [];
+                if ( ! in_array( 'show_if_' . FCSD_Core::PRODUCT_TYPE, $tabs['general']['class'], true ) ) {
+                        $tabs['general']['class'][] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
+                }
+                if ( isset( $tabs['inventory'] ) ) {
+                        $tabs['inventory']['class'] = isset( $tabs['inventory']['class'] ) ? (array) $tabs['inventory']['class'] : [];
+                        if ( ! in_array( 'show_if_' . FCSD_Core::PRODUCT_TYPE, $tabs['inventory']['class'], true ) ) {
+                                $tabs['inventory']['class'][] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
+                        }
+                }
 		$tabs['fcsd_obra_unica'] = [
 			'label' => __( "Obra d’art única", 'fcsd-exposicio' ),
 			'target' => 'fcsd_obra_unica_data',
@@ -366,18 +370,41 @@ class FCSD_Commerce {
 			$is_obra = $p && $p->get_type() === FCSD_Core::PRODUCT_TYPE;
 		}
 		?>
-		<script>
-		jQuery(function($){
-			function fcsd_apply_obra_unica_visibility(){
-				var $wrap = $('#woocommerce-product-data');
-				$('#general_product_data').addClass('show_if_obra_unica');
-				$wrap.find('.options_group.pricing').addClass('show_if_obra_unica');
-				$wrap.find('._regular_price_field, ._sale_price_field').addClass('show_if_obra_unica');
-				$wrap.find('._sale_price_dates_fields, .sale_price_dates_fields').addClass('show_if_obra_unica');
-				$(document.body).trigger('woocommerce_product_type_changed');
-			}
-			$(document.body).on('woocommerce_init woocommerce_product_type_changed', fcsd_apply_obra_unica_visibility);
-			fcsd_apply_obra_unica_visibility();
+                <script>
+                jQuery(function($){
+                        var uniqueSlug = '<?php echo esc_js( FCSD_Core::PRODUCT_TYPE ); ?>';
+                        var uniqueClass = 'show_if_' + uniqueSlug;
+
+                        function toggleUniqueVisibility( type ) {
+                                var currentType  = type || $('#product-type').val();
+                                var enable       = currentType === uniqueSlug;
+                                var $wrap        = $('#woocommerce-product-data');
+                                var $generalTab  = $wrap.find('ul.wc-tabs li.general_options, ul.wc-tabs li.general_tab');
+                                var $inventoryTab = $wrap.find('ul.wc-tabs li.inventory_options, ul.wc-tabs li.inventory_tab');
+                                var $generalPanel = $('#general_product_data');
+                                var $inventoryPanel = $('#inventory_product_data');
+                                var $pricingGroup = $wrap.find('.options_group.pricing');
+                                var $priceFields  = $wrap.find('._regular_price_field, ._sale_price_field');
+                                var $saleDates    = $wrap.find('._sale_price_dates_fields, .sale_price_dates_fields');
+
+                                $generalTab.toggleClass( uniqueClass, enable ).show();
+                                $inventoryTab.toggleClass( uniqueClass, enable ).show();
+                                $generalPanel.toggleClass( uniqueClass, enable ).show();
+                                $inventoryPanel.toggleClass( uniqueClass, enable ).show();
+                                $pricingGroup.toggleClass( uniqueClass, enable ).show();
+                                $priceFields.toggleClass( uniqueClass, enable ).closest('.options_group, p').show();
+                                $saleDates.toggleClass( uniqueClass, enable ).show();
+                        }
+
+                        $(document.body).on('woocommerce_init', function(){
+                                toggleUniqueVisibility();
+                        });
+
+                        $(document.body).on('woocommerce_product_type_changed', function(event, type){
+                                toggleUniqueVisibility( type );
+                        });
+
+                        toggleUniqueVisibility();
 
 			<?php if ( $is_obra ) : ?>
 			var $sel = $('#product-type');
@@ -385,13 +412,13 @@ class FCSD_Commerce {
 				if ( $sel.val() !== '<?php echo esc_js( FCSD_Core::PRODUCT_TYPE ); ?>' ) {
 					$sel.val('<?php echo esc_js( FCSD_Core::PRODUCT_TYPE ); ?>').trigger('change');
 				} else {
-					$(document.body).trigger('woocommerce_init');
-					$(document.body).trigger('woocommerce_product_type_changed');
-				}
-			}
-			<?php endif; ?>
-		});
-		</script>
+                                        $(document.body).trigger('woocommerce_init');
+                                        $(document.body).trigger('woocommerce_product_type_changed', [ uniqueSlug ] );
+                                }
+                        }
+                        <?php endif; ?>
+                });
+                </script>
 		<?php
 	}
 
