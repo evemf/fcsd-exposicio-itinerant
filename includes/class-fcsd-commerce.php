@@ -88,14 +88,10 @@ class FCSD_Commerce {
 			];
 		}
                 $tabs['general']['class'] = isset( $tabs['general']['class'] ) ? (array) $tabs['general']['class'] : [];
-                if ( ! in_array( 'show_if_' . FCSD_Core::PRODUCT_TYPE, $tabs['general']['class'], true ) ) {
-                        $tabs['general']['class'][] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
-                }
+                $tabs['general']['class'] = $this->ensure_show_if_for_unique( $tabs['general']['class'] );
                 if ( isset( $tabs['inventory'] ) ) {
                         $tabs['inventory']['class'] = isset( $tabs['inventory']['class'] ) ? (array) $tabs['inventory']['class'] : [];
-                        if ( ! in_array( 'show_if_' . FCSD_Core::PRODUCT_TYPE, $tabs['inventory']['class'], true ) ) {
-                                $tabs['inventory']['class'][] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
-                        }
+                        $tabs['inventory']['class'] = $this->ensure_show_if_for_unique( $tabs['inventory']['class'] );
                 }
 		$tabs['fcsd_obra_unica'] = [
 			'label' => __( "Obra d’art única", 'fcsd-exposicio' ),
@@ -103,8 +99,24 @@ class FCSD_Commerce {
 			'class' => [ 'show_if_' . FCSD_Core::PRODUCT_TYPE ],
 			'priority' => 21,
 		];
-		return $tabs;
-	}
+                return $tabs;
+        }
+
+        private function ensure_show_if_for_unique( array $classes ) {
+                $classes = array_values( array_filter( $classes ) );
+                $has_show_if = false;
+                foreach ( $classes as $class ) {
+                        if ( strpos( $class, 'show_if_' ) === 0 ) {
+                                $has_show_if = true;
+                                break;
+                        }
+                }
+                if ( $has_show_if && ! in_array( 'show_if_' . FCSD_Core::PRODUCT_TYPE, $classes, true ) ) {
+                        $classes[] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
+                }
+
+                return array_values( array_unique( $classes ) );
+        }
 
 	public function render_product_data_panel() {
 		?>
