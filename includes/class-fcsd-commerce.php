@@ -88,10 +88,10 @@ class FCSD_Commerce {
 			];
 		}
                 $tabs['general']['class'] = isset( $tabs['general']['class'] ) ? (array) $tabs['general']['class'] : [];
-                $tabs['general']['class'] = $this->ensure_general_tab_visibility( $tabs['general']['class'] );
+                $tabs['general']['class'] = $this->ensure_show_if_for_unique( $tabs['general']['class'] );
                 if ( isset( $tabs['inventory'] ) ) {
                         $tabs['inventory']['class'] = isset( $tabs['inventory']['class'] ) ? (array) $tabs['inventory']['class'] : [];
-                        $tabs['inventory']['class'] = $this->ensure_show_if_for_unique( $tabs['inventory']['class'] );
+                        $tabs['inventory']['class'] = $this->ensure_show_if_for_unique( $tabs['inventory']['class'], true );
                 }
 		$tabs['fcsd_obra_unica'] = [
 			'label' => __( "Obra d’art única", 'fcsd-exposicio' ),
@@ -102,17 +102,8 @@ class FCSD_Commerce {
                 return $tabs;
         }
 
-        private function ensure_show_if_for_unique( array $classes, bool $remove_hide_if = false ) {
+        private function ensure_show_if_for_unique( array $classes, bool $require_existing_show_if = false ) {
                 $normalized = $this->normalize_tab_classes( $classes );
-
-                if ( $remove_hide_if ) {
-                        $normalized = array_values( array_filter(
-                                $normalized,
-                                static function ( $class ) {
-                                        return strpos( $class, 'hide_if_' ) !== 0;
-                                }
-                        ) );
-                }
 
                 $had_show_if = false;
                 foreach ( $normalized as $class ) {
@@ -122,39 +113,8 @@ class FCSD_Commerce {
                         }
                 }
 
-                if ( $had_show_if && ! in_array( 'show_if_' . FCSD_Core::PRODUCT_TYPE, $normalized, true ) ) {
+                if ( ( ! $require_existing_show_if || $had_show_if ) && ! in_array( 'show_if_' . FCSD_Core::PRODUCT_TYPE, $normalized, true ) ) {
                         $normalized[] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
-                }
-
-                return $normalized;
-        }
-
-        private function ensure_general_tab_visibility( array $classes ) {
-                $normalized = $this->normalize_tab_classes( $classes );
-
-                $normalized = array_values( array_filter(
-                        $normalized,
-                        static function ( $class ) {
-                                return strpos( $class, 'hide_if_' ) !== 0;
-                        }
-                ) );
-
-                // Guarantee WooCommerce base classes remain in place and in the expected order.
-                $normalized = array_values( array_diff( $normalized, [ 'general_options', 'general_tab' ] ) );
-                $normalized = array_merge( [ 'general_options', 'general_tab' ], $normalized );
-
-                $required_show_if = [
-                        'show_if_simple',
-                        'show_if_external',
-                        'show_if_grouped',
-                        'show_if_variable',
-                        'show_if_' . FCSD_Core::PRODUCT_TYPE,
-                ];
-
-                foreach ( $required_show_if as $required ) {
-                        if ( ! in_array( $required, $normalized, true ) ) {
-                                $normalized[] = $required;
-                        }
                 }
 
                 return $normalized;
