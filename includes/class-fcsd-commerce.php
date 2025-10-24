@@ -139,6 +139,10 @@ class FCSD_Commerce {
                         }
                 ) );
 
+                // Guarantee WooCommerce base classes remain in place and in the expected order.
+                $normalized = array_values( array_diff( $normalized, [ 'general_options', 'general_tab' ] ) );
+                $normalized = array_merge( [ 'general_options', 'general_tab' ], $normalized );
+
                 $required_show_if = [
                         'show_if_simple',
                         'show_if_external',
@@ -151,10 +155,6 @@ class FCSD_Commerce {
                         if ( ! in_array( $required, $normalized, true ) ) {
                                 $normalized[] = $required;
                         }
-                }
-
-                if ( ! in_array( 'general_options', $normalized, true ) ) {
-                        array_unshift( $normalized, 'general_options' );
                 }
 
                 return $normalized;
