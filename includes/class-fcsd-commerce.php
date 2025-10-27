@@ -79,19 +79,17 @@ class FCSD_Commerce {
 	}
 
 	public function add_product_data_tab( $tabs ) {
-		if ( ! isset( $tabs['general'] ) ) {
-			$tabs['general'] = [
-				'label' => __( 'General', 'woocommerce' ),
-				'target' => 'general_product_data',
-				'class' => [ 'general_options' ],
-				'priority' => 10,
-			];
-		}
-                $tabs['general']['class'] = isset( $tabs['general']['class'] ) ? (array) $tabs['general']['class'] : [];
-                $tabs['general']['class'] = $this->ensure_show_if_for_unique( $tabs['general']['class'], true );
+                if ( ! isset( $tabs['general'] ) ) {
+                        $tabs['general'] = [
+                                'label' => __( 'General', 'woocommerce' ),
+                                'target' => 'general_product_data',
+                                'class' => [ 'general_options' ],
+                                'priority' => 10,
+                        ];
+                }
+                $tabs['general']['class'] = $this->add_unique_type_class( $tabs['general']['class'] ?? [] );
                 if ( isset( $tabs['inventory'] ) ) {
-                        $tabs['inventory']['class'] = isset( $tabs['inventory']['class'] ) ? (array) $tabs['inventory']['class'] : [];
-                        $tabs['inventory']['class'] = $this->ensure_show_if_for_unique( $tabs['inventory']['class'], true );
+                        $tabs['inventory']['class'] = $this->add_unique_type_class( $tabs['inventory']['class'] );
                 }
 		$tabs['fcsd_obra_unica'] = [
 			'label' => __( "Obra d’art única", 'fcsd-exposicio' ),
@@ -102,22 +100,15 @@ class FCSD_Commerce {
                 return $tabs;
         }
 
-        private function ensure_show_if_for_unique( array $classes, bool $require_existing_show_if = false ) {
-                $normalized = $this->normalize_tab_classes( $classes );
+        private function add_unique_type_class( $classes ) {
+                $original_is_array = is_array( $classes );
+                $normalized        = $this->normalize_tab_classes( $original_is_array ? $classes : (array) $classes );
 
-                $had_show_if = false;
-                foreach ( $normalized as $class ) {
-                        if ( strpos( $class, 'show_if_' ) === 0 ) {
-                                $had_show_if = true;
-                                break;
-                        }
-                }
-
-                if ( ( ! $require_existing_show_if || $had_show_if ) && ! in_array( 'show_if_' . FCSD_Core::PRODUCT_TYPE, $normalized, true ) ) {
+                if ( ! in_array( 'show_if_' . FCSD_Core::PRODUCT_TYPE, $normalized, true ) ) {
                         $normalized[] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
                 }
 
-                return $normalized;
+                return $original_is_array ? $normalized : implode( ' ', $normalized );
         }
 
         private function normalize_tab_classes( array $classes ) {
