@@ -88,7 +88,7 @@ class FCSD_Commerce {
 			];
 		}
                 $tabs['general']['class'] = isset( $tabs['general']['class'] ) ? (array) $tabs['general']['class'] : [];
-                $tabs['general']['class'] = $this->ensure_show_if_for_unique( $tabs['general']['class'] );
+                $tabs['general']['class'] = $this->ensure_show_if_for_unique( $tabs['general']['class'], true );
                 if ( isset( $tabs['inventory'] ) ) {
                         $tabs['inventory']['class'] = isset( $tabs['inventory']['class'] ) ? (array) $tabs['inventory']['class'] : [];
                         $tabs['inventory']['class'] = $this->ensure_show_if_for_unique( $tabs['inventory']['class'], true );
