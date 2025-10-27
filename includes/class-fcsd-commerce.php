@@ -397,46 +397,49 @@ class FCSD_Commerce {
 		?>
                 <script>
                 jQuery(function($){
-                        var uniqueSlug = '<?php echo esc_js( FCSD_Core::PRODUCT_TYPE ); ?>';
+                        var uniqueSlug  = '<?php echo esc_js( FCSD_Core::PRODUCT_TYPE ); ?>';
                         var uniqueClass = 'show_if_' + uniqueSlug;
 
-                        function toggleUniqueVisibility( type ) {
-                                var currentType  = type || $('#product-type').val();
-                                var enable       = currentType === uniqueSlug;
-                                var $wrap        = $('#woocommerce-product-data');
-                                var $generalTab  = $wrap.find('ul.wc-tabs li.general_options, ul.wc-tabs li.general_tab');
-                                var $inventoryTab = $wrap.find('ul.wc-tabs li.inventory_options, ul.wc-tabs li.inventory_tab');
-                                var $generalPanel = $('#general_product_data');
-                                var $inventoryPanel = $('#inventory_product_data');
-                                var $pricingGroup = $wrap.find('.options_group.pricing');
-                                var $priceFields  = $wrap.find('._regular_price_field, ._sale_price_field');
-                                var $saleDates    = $wrap.find('._sale_price_dates_fields, .sale_price_dates_fields');
+                        function ensureUniqueSupport() {
+                                var $wrap            = $('#woocommerce-product-data');
+                                var $generalTab      = $wrap.find('ul.wc-tabs li.general_options, ul.wc-tabs li.general_tab');
+                                var $inventoryTab    = $wrap.find('ul.wc-tabs li.inventory_options, ul.wc-tabs li.inventory_tab');
+                                var $generalPanel    = $('#general_product_data');
+                                var $inventoryPanel  = $('#inventory_product_data');
+                                var $pricingGroup    = $wrap.find('.options_group.pricing');
+                                var $priceFields     = $wrap.find('._regular_price_field, ._sale_price_field');
+                                var $saleDates       = $wrap.find('._sale_price_dates_fields, .sale_price_dates_fields');
+                                var $priceContainers = $priceFields.closest('.options_group, p');
 
-                                $generalTab.toggleClass( uniqueClass, enable ).show();
-                                $inventoryTab.toggleClass( uniqueClass, enable ).show();
-                                $generalPanel.toggleClass( uniqueClass, enable ).show();
-                                $inventoryPanel.toggleClass( uniqueClass, enable ).show();
-                                $pricingGroup.toggleClass( uniqueClass, enable ).show();
-                                $priceFields.toggleClass( uniqueClass, enable ).closest('.options_group, p').show();
-                                $saleDates.toggleClass( uniqueClass, enable ).show();
+                                var $targets = $().add($generalTab).add($inventoryTab).add($generalPanel).add($inventoryPanel)
+                                        .add($pricingGroup).add($priceFields).add($priceContainers).add($saleDates);
+
+                                $targets.each(function(){
+                                        var $el = $(this);
+                                        if ( $el.length && !$el.hasClass(uniqueClass) ) {
+                                                $el.addClass( uniqueClass );
+                                        }
+                                });
                         }
 
-                        $(document.body).on('woocommerce_init', function(){
-                                toggleUniqueVisibility();
-                        });
+                        function refreshProductType() {
+                                var currentType = $('#product-type').val();
+                                $(document.body).trigger('woocommerce_product_type_changed', [ currentType ] );
+                        }
 
-                        $(document.body).on('woocommerce_product_type_changed', function(event, type){
-                                toggleUniqueVisibility( type );
-                        });
+                        $(document.body).on('woocommerce_init', ensureUniqueSupport);
+                        $(document.body).on('woocommerce_product_type_changed', ensureUniqueSupport);
 
-                        toggleUniqueVisibility();
+                        ensureUniqueSupport();
+                        refreshProductType();
 
-			<?php if ( $is_obra ) : ?>
-			var $sel = $('#product-type');
-			if ( $sel.length ) {
-				if ( $sel.val() !== '<?php echo esc_js( FCSD_Core::PRODUCT_TYPE ); ?>' ) {
-					$sel.val('<?php echo esc_js( FCSD_Core::PRODUCT_TYPE ); ?>').trigger('change');
-				} else {
+                        <?php if ( $is_obra ) : ?>
+                        var $sel = $('#product-type');
+                        if ( $sel.length ) {
+                                if ( $sel.val() !== uniqueSlug ) {
+                                        $sel.val( uniqueSlug ).trigger('change');
+                                } else {
+                                        ensureUniqueSupport();
                                         $(document.body).trigger('woocommerce_init');
                                         $(document.body).trigger('woocommerce_product_type_changed', [ uniqueSlug ] );
                                 }
@@ -444,8 +447,8 @@ class FCSD_Commerce {
                         <?php endif; ?>
                 });
                 </script>
-		<?php
-	}
+                <?php
+        }
 
 	/* ======= Helpers checkout/pagos ======= */
 
