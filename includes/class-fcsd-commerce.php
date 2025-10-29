@@ -38,11 +38,8 @@ class FCSD_Commerce {
 		add_action( 'woocommerce_before_calculate_totals', [ $this, 'ensure_unique_product_price_in_cart' ], 20 );
 
 		// === Email "Nuevo pedido" para obras únicas ===
-		// Añadir destinatario extra SOLO en "Nuevo pedido" y con máxima prioridad.
 		add_filter( 'woocommerce_email_recipient_new_order', [ $this, 'add_extra_recipient_if_obra_unica' ], PHP_INT_MAX, 2 );
-		// Asegurar que el email "Nuevo pedido" esté habilitado si hay obra única.
 		add_filter( 'woocommerce_email_enabled_new_order', [ $this, 'enable_new_order_email_for_unique' ], 10, 2 );
-		// Disparos defensivos para garantizar el envío.
 		add_action( 'woocommerce_checkout_order_processed', [ $this, 'ensure_new_order_email_sent' ], 999, 3 );
 		add_action( 'woocommerce_payment_complete',        [ $this, 'ensure_new_order_email_sent' ], 5,   1 );
 		add_action( 'woocommerce_thankyou',                [ $this, 'ensure_new_order_email_sent' ], 5,   1 );
@@ -78,58 +75,85 @@ class FCSD_Commerce {
 		return $classname;
 	}
 
+	/**
+	 * Tabs de datos de producto:
+	 * - No encerramos "General" ni "Inventario" solo para nuestro tipo.
+	 * - Si ya están condicionados por show_if_*, añadimos nuestro show_if_{tipo}.
+	 * - Creamos "Inventario" si algún plugin lo quitó.
+	 */
 	public function add_product_data_tab( $tabs ) {
-                if ( ! isset( $tabs['general'] ) ) {
-                        $tabs['general'] = [
-                                'label' => __( 'General', 'woocommerce' ),
-                                'target' => 'general_product_data',
-                                'class' => [ 'general_options' ],
-                                'priority' => 10,
-                        ];
-                }
-                $tabs['general']['class'] = $this->add_unique_type_class( $tabs['general']['class'] ?? [] );
-                if ( isset( $tabs['inventory'] ) ) {
-                        $tabs['inventory']['class'] = $this->add_unique_type_class( $tabs['inventory']['class'] );
-                }
+		// Asegurar General (estructura estándar). NO añadir show_if_* aquí directamente.
+		if ( empty( $tabs['general'] ) ) {
+			$tabs['general'] = [
+				'label'    => __( 'General', 'woocommerce' ),
+				'target'   => 'general_product_data',
+				'class'    => [ 'general_options' ],
+				'priority' => 10,
+			];
+		}
+		// Si algún entorno añadió show_if_* a General, extender a nuestro tipo.
+		$tabs['general']['class'] = $this->add_unique_type_class( $tabs['general']['class'] ?? [] );
+
+		// Asegurar Inventario (core suele traer show_if_* aquí)
+		if ( empty( $tabs['inventory'] ) ) {
+			$tabs['inventory'] = [
+				'label'    => __( 'Inventario', 'woocommerce' ),
+				'target'   => 'inventory_product_data',
+				'class'    => [ 'inventory_options', 'show_if_simple', 'show_if_variable', 'show_if_grouped' ],
+				'priority' => 20,
+			];
+		}
+		$tabs['inventory']['class'] = $this->add_unique_type_class( $tabs['inventory']['class'] ?? [] );
+
+		// Pestaña propia del tipo
 		$tabs['fcsd_obra_unica'] = [
-			'label' => __( "Obra d’art única", 'fcsd-exposicio' ),
-			'target' => 'fcsd_obra_unica_data',
-			'class' => [ 'show_if_' . FCSD_Core::PRODUCT_TYPE ],
+			'label'    => __( "Obra d’art única", 'fcsd-exposicio' ),
+			'target'   => 'fcsd_obra_unica_data',
+			'class'    => [ 'show_if_' . FCSD_Core::PRODUCT_TYPE ],
 			'priority' => 21,
 		];
-                return $tabs;
-        }
 
-        private function add_unique_type_class( $classes ) {
-                $original_is_array = is_array( $classes );
-                $normalized        = $this->normalize_tab_classes( $original_is_array ? $classes : (array) $classes );
+		return $tabs;
+	}
 
-                if ( ! in_array( 'show_if_' . FCSD_Core::PRODUCT_TYPE, $normalized, true ) ) {
-                        $normalized[] = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
+	/**
+	 * Añade 'show_if_{tipo}' SOLO si ya hay alguna clase 'show_if_*' en el destino,
+	 * para no ocultar el elemento globalmente a otros tipos.
+	 * Mantiene el tipo de entrada (array|string).
+	 */
+    private function add_unique_type_class( $classes ) {
+		$original_is_array = is_array( $classes );
+		$normalized = $this->normalize_tab_classes( $original_is_array ? $classes : (array) $classes );
+
+		$has_show_if = false;
+		foreach ( $normalized as $c ) {
+			if ( strpos( $c, 'show_if_' ) === 0 ) { $has_show_if = true; break; }
+		}
+
+		if ( $has_show_if ) {
+			$needle = 'show_if_' . FCSD_Core::PRODUCT_TYPE;
+			if ( ! in_array( $needle, $normalized, true ) ) {
+				$normalized[] = $needle;
+			}
+		}
+
+		return $original_is_array ? $normalized : implode( ' ', $normalized );
+	}
+
+    private function normalize_tab_classes( array $classes ) {
+        $normalized = [];
+        foreach ( $classes as $class ) {
+            $parts = preg_split( '/\s+/', (string) $class );
+            if ( ! $parts ) continue;
+            foreach ( $parts as $part ) {
+                $part = trim( $part );
+                if ( $part !== '' && ! in_array( $part, $normalized, true ) ) {
+                    $normalized[] = $part;
                 }
-
-                return $original_is_array ? $normalized : implode( ' ', $normalized );
+            }
         }
-
-        private function normalize_tab_classes( array $classes ) {
-                $normalized = [];
-
-                foreach ( $classes as $class ) {
-                        $parts = preg_split( '/\s+/', (string) $class );
-                        if ( ! $parts ) {
-                                continue;
-                        }
-
-                        foreach ( $parts as $part ) {
-                                $part = trim( $part );
-                                if ( $part !== '' && ! in_array( $part, $normalized, true ) ) {
-                                        $normalized[] = $part;
-                                }
-                        }
-                }
-
-                return $normalized;
-        }
+        return $normalized;
+    }
 
 	public function render_product_data_panel() {
 		?>
@@ -172,13 +196,8 @@ class FCSD_Commerce {
 		$has_fields  = ( ! empty($_POST[FCSD_Core::META_AUTOR]) || ! empty($_POST[FCSD_Core::META_ANY]) || ! empty($_POST[FCSD_Core::META_MESURES]) );
 		$panel_flag  = isset($_POST['_fcsd_force_unique']) && $_POST['_fcsd_force_unique'] === '1';
 
-		if ( $posted_type && $posted_type !== FCSD_Core::PRODUCT_TYPE ) {
-			return;
-		}
-
-		if ( ! $panel_flag && ! $has_fields && $posted_type !== FCSD_Core::PRODUCT_TYPE ) {
-			return;
-		}
+		if ( $posted_type && $posted_type !== FCSD_Core::PRODUCT_TYPE ) return;
+		if ( ! $panel_flag && ! $has_fields && $posted_type !== FCSD_Core::PRODUCT_TYPE ) return;
 
 		if ( isset( $_POST[ FCSD_Core::META_AUTOR ] ) )   $product->update_meta_data( FCSD_Core::META_AUTOR,   sanitize_text_field( wp_unslash( $_POST[ FCSD_Core::META_AUTOR ] ) ) );
 		if ( isset( $_POST[ FCSD_Core::META_ANY ] ) )     $product->update_meta_data( FCSD_Core::META_ANY,     intval( wp_unslash( $_POST[ FCSD_Core::META_ANY ] ) ) );
@@ -220,9 +239,7 @@ class FCSD_Commerce {
 		if ( ! ( $p instanceof WC_Product ) ) return;
 		if ( ! $this->product_is_unique( $p ) ) return;
 
-		if ( $order instanceof WC_Order ) {
-			$order->update_meta_data( '_fcsd_has_unique', 'yes' );
-		}
+		if ( $order instanceof WC_Order ) $order->update_meta_data( '_fcsd_has_unique', 'yes' );
 
 		$line_total = (float) $item->get_total();
 		$qty        = max( 1, (int) $item->get_quantity() );
@@ -246,9 +263,8 @@ class FCSD_Commerce {
 		$nonce = isset($_POST['woocommerce_meta_nonce']) ? $_POST['woocommerce_meta_nonce'] : '';
 		if ( ! $nonce || ! wp_verify_nonce( $nonce, 'woocommerce_save_data' ) ) return;
 		$posted_type = $this->get_requested_product_type();
-		if ( $posted_type && $posted_type !== FCSD_Core::PRODUCT_TYPE ) {
-			return;
-		}
+		if ( $posted_type && $posted_type !== FCSD_Core::PRODUCT_TYPE ) return;
+
 		$has_fields = ( ! empty($_POST[FCSD_Core::META_AUTOR]) || ! empty($_POST[FCSD_Core::META_ANY]) || ! empty($_POST[FCSD_Core::META_MESURES]) );
 		$panel_flag = isset($_POST['_fcsd_force_unique']) && $_POST['_fcsd_force_unique'] === '1';
 
@@ -321,48 +337,26 @@ class FCSD_Commerce {
 
 	private function should_treat_as_unique( $product_id = 0, $product = null ) : bool {
 		$posted_type = $this->get_requested_product_type();
-		if ( $posted_type && $posted_type !== FCSD_Core::PRODUCT_TYPE ) {
-			return false;
-		}
-
-		if ( $posted_type === FCSD_Core::PRODUCT_TYPE ) {
-			return true;
-		}
+		if ( $posted_type && $posted_type !== FCSD_Core::PRODUCT_TYPE ) return false;
+		if ( $posted_type === FCSD_Core::PRODUCT_TYPE ) return true;
 
 		if ( isset( $_POST['_fcsd_force_unique'] ) && '1' === $_POST['_fcsd_force_unique'] ) {
 			return ! $posted_type;
 		}
 
-		if ( isset( $_POST[ FCSD_Core::META_AUTOR ] ) && $_POST[ FCSD_Core::META_AUTOR ] !== '' ) {
-			return true;
-		}
+		if ( isset( $_POST[ FCSD_Core::META_AUTOR ] ) && $_POST[ FCSD_Core::META_AUTOR ] !== '' ) return true;
+		if ( isset( $_POST[ FCSD_Core::META_ANY ] )   && $_POST[ FCSD_Core::META_ANY ]   !== '' ) return true;
+		if ( isset( $_POST[ FCSD_Core::META_MESURES ] ) && $_POST[ FCSD_Core::META_MESURES ] !== '' ) return true;
 
-		if ( isset( $_POST[ FCSD_Core::META_ANY ] ) && $_POST[ FCSD_Core::META_ANY ] !== '' ) {
-			return true;
-		}
-
-		if ( isset( $_POST[ FCSD_Core::META_MESURES ] ) && $_POST[ FCSD_Core::META_MESURES ] !== '' ) {
-			return true;
-		}
-
-		if ( ! ( $product instanceof WC_Product ) && $product_id ) {
-			$product = wc_get_product( $product_id );
-		}
+		if ( ! ( $product instanceof WC_Product ) && $product_id ) $product = wc_get_product( $product_id );
 
 		if ( $product instanceof WC_Product ) {
-			if ( $this->product_is_unique( $product ) ) {
-				return true;
-			}
+			if ( $this->product_is_unique( $product ) ) return true;
 		}
 
 		if ( $product_id ) {
-			if ( has_term( FCSD_Core::PRODUCT_TYPE, 'product_type', $product_id ) ) {
-				return true;
-			}
-
-			if ( get_post_meta( $product_id, '_product_type', true ) === FCSD_Core::PRODUCT_TYPE ) {
-				return true;
-			}
+			if ( has_term( FCSD_Core::PRODUCT_TYPE, 'product_type', $product_id ) ) return true;
+			if ( get_post_meta( $product_id, '_product_type', true ) === FCSD_Core::PRODUCT_TYPE ) return true;
 		}
 
 		return false;
@@ -377,14 +371,16 @@ class FCSD_Commerce {
 		if ( isset( $_POST['product-type'] ) ) {
 			return sanitize_text_field( wp_unslash( $_POST['product-type'] ) );
 		}
-
 		if ( isset( $_REQUEST['product_type'] ) ) {
 			return sanitize_text_field( wp_unslash( $_REQUEST['product_type'] ) );
 		}
-
 		return '';
 	}
 
+	/**
+	 * Solo añadimos show_if_{tipo} a elementos que YA usan show_if_*
+	 * (precio, fechas, panel inventario...). No tocamos General si no tiene show_if_*.
+	 */
 	public function admin_js_show_price_for_obra_unica() {
 		$screen = function_exists('get_current_screen') ? get_current_screen() : null;
 		if ( ! $screen || $screen->id !== 'product' ) return;
@@ -395,60 +391,70 @@ class FCSD_Commerce {
 			$is_obra = $p && $p->get_type() === FCSD_Core::PRODUCT_TYPE;
 		}
 		?>
-                <script>
-                jQuery(function($){
-                        var uniqueSlug  = '<?php echo esc_js( FCSD_Core::PRODUCT_TYPE ); ?>';
-                        var uniqueClass = 'show_if_' + uniqueSlug;
+		<script>
+		jQuery(function($){
+			var uniqueSlug  = '<?php echo esc_js( FCSD_Core::PRODUCT_TYPE ); ?>';
+			var uniqueClass = 'show_if_' + uniqueSlug;
 
-                        function ensureUniqueSupport() {
-                                var $wrap            = $('#woocommerce-product-data');
-                                var $generalTab      = $wrap.find('ul.wc-tabs li.general_options, ul.wc-tabs li.general_tab');
-                                var $inventoryTab    = $wrap.find('ul.wc-tabs li.inventory_options, ul.wc-tabs li.inventory_tab');
-                                var $generalPanel    = $('#general_product_data');
-                                var $inventoryPanel  = $('#inventory_product_data');
-                                var $pricingGroup    = $wrap.find('.options_group.pricing');
-                                var $priceFields     = $wrap.find('._regular_price_field, ._sale_price_field');
-                                var $saleDates       = $wrap.find('._sale_price_dates_fields, .sale_price_dates_fields');
-                                var $priceContainers = $priceFields.closest('.options_group, p');
+			function hasShowIf($el){ return /\bshow_if_/.test(($el.attr('class')||'')); }
 
-                                var $targets = $().add($generalTab).add($inventoryTab).add($generalPanel).add($inventoryPanel)
-                                        .add($pricingGroup).add($priceFields).add($priceContainers).add($saleDates);
+			function ensureUniqueSupport() {
+				var $wrap            = $('#woocommerce-product-data');
 
-                                $targets.each(function(){
-                                        var $el = $(this);
-                                        if ( $el.length && !$el.hasClass(uniqueClass) ) {
-                                                $el.addClass( uniqueClass );
-                                        }
-                                });
-                        }
+				// GENERAL – grupos/campos de precio (en core usan show_if_*: simple, external, etc.)
+				var $pricingGroup    = $wrap.find('.options_group.pricing');
+				var $priceFields     = $wrap.find('._regular_price_field, ._sale_price_field');
+				var $saleDates       = $wrap.find('._sale_price_dates_fields, .sale_price_dates_fields');
 
-                        function refreshProductType() {
-                                var currentType = $('#product-type').val();
-                                $(document.body).trigger('woocommerce_product_type_changed', [ currentType ] );
-                        }
+				// Pestaña/panel General: solo si ya tienen show_if_ (por terceros)
+				var $generalPanel    = $('#general_product_data');
+				var $generalTab      = $wrap.find('ul.wc-tabs li.general_options, ul.wc-tabs li.general_tab');
 
-                        $(document.body).on('woocommerce_init', ensureUniqueSupport);
-                        $(document.body).on('woocommerce_product_type_changed', ensureUniqueSupport);
+				// INVENTARIO – panel y tab (core ya traen show_if_*)
+				var $inventoryPanel  = $('#inventory_product_data');
+				var $inventoryTab    = $wrap.find('ul.wc-tabs li.inventory_options, ul.wc-tabs li.inventory_tab');
 
-                        ensureUniqueSupport();
-                        refreshProductType();
+				[
+					$pricingGroup, $priceFields, $saleDates,
+					$generalPanel, $generalTab,
+					$inventoryPanel, $inventoryTab
+				].forEach(function($el){
+					$el.each(function(){
+						var $t = $(this);
+						if ($t.length && hasShowIf($t) && !$t.hasClass(uniqueClass)) {
+							$t.addClass(uniqueClass);
+						}
+					});
+				});
+			}
 
-                        <?php if ( $is_obra ) : ?>
-                        var $sel = $('#product-type');
-                        if ( $sel.length ) {
-                                if ( $sel.val() !== uniqueSlug ) {
-                                        $sel.val( uniqueSlug ).trigger('change');
-                                } else {
-                                        ensureUniqueSupport();
-                                        $(document.body).trigger('woocommerce_init');
-                                        $(document.body).trigger('woocommerce_product_type_changed', [ uniqueSlug ] );
-                                }
-                        }
-                        <?php endif; ?>
-                });
-                </script>
-                <?php
-        }
+			function refreshProductType() {
+				var currentType = $('#product-type').val();
+				$(document.body).trigger('woocommerce_product_type_changed', [ currentType ] );
+			}
+
+			$(document.body).on('woocommerce_init', ensureUniqueSupport);
+			$(document.body).on('woocommerce_product_type_changed', ensureUniqueSupport);
+
+			ensureUniqueSupport();
+			refreshProductType();
+
+			<?php if ( $is_obra ) : ?>
+			var $sel = $('#product-type');
+			if ( $sel.length ) {
+				if ( $sel.val() !== uniqueSlug ) {
+					$sel.val( uniqueSlug ).trigger('change');
+				} else {
+					ensureUniqueSupport();
+					$(document.body).trigger('woocommerce_init');
+					$(document.body).trigger('woocommerce_product_type_changed', [ uniqueSlug ] );
+				}
+			}
+			<?php endif; ?>
+		});
+		</script>
+		<?php
+	}
 
 	/* ======= Helpers checkout/pagos ======= */
 
@@ -654,9 +660,10 @@ class FCSD_Commerce {
 	    if ( ! $strict ) return true;
 
 	    $at_checkout = false;
-	    if ( function_exists( 'is_checkout' ) && is_checkout() ) {
-		    $at_checkout = true;
-	    } elseif ( isset( $_GET['add-to-cart'] ) && ! empty( $_GET['fcsd_gw'] ) ) {
+	    if ( function_exists( 'is_checkout' ) ) {
+			if ( is_checkout() ) $at_checkout = true;
+	    }
+	    if ( !$at_checkout && isset( $_GET['add-to-cart'] ) && ! empty( $_GET['fcsd_gw'] ) ) {
 		    $at_checkout = true;
 	    }
 
@@ -731,7 +738,7 @@ class FCSD_Commerce {
 	}
 
     public function unique_force_guest_checkout( $pre ) {
-	return $this->is_unique_checkout_context( false ) ? 'yes' : $pre;
+		return $this->is_unique_checkout_context( false ) ? 'yes' : $pre;
     }
 
 	public function disable_hold_stock_for_unique_checkout_only( $pre ) {
@@ -798,9 +805,6 @@ class FCSD_Commerce {
 
 	/* ======= Email: forzar envío de "Nueva comanda" si es obra única ======= */
 
-	/**
-	 * Si el pedido contiene obra única, forzamos que el email "Nuevo pedido" esté habilitado.
-	 */
 	public function enable_new_order_email_for_unique( $enabled, $order ) {
 		if ( $order instanceof WC_Order && $this->order_has_unique_item( $order ) ) {
 			return true;
@@ -808,25 +812,16 @@ class FCSD_Commerce {
 		return $enabled;
 	}
 
-	/**
-	 * Lanza el email de "Nuevo pedido" si el pedido contiene obra única
-	 * y aún no lo hemos enviado en esta ejecución. Evita duplicados con meta.
-	 *
-	 * Acepta $order_id o WC_Order.
-	 */
 	public function ensure_new_order_email_sent( $maybe_order ) {
 		$order = $maybe_order instanceof WC_Order ? $maybe_order : ( $maybe_order ? wc_get_order( $maybe_order ) : null );
 		if ( ! $order ) return;
 
-		// Evitar duplicados
 		if ( 'yes' === $order->get_meta( '_fcsd_new_order_email_sent', true ) ) return;
 		if ( ! $this->order_has_unique_item( $order ) ) return;
 
-		// Marcar primero para evitar condiciones de carrera
 		$order->update_meta_data( '_fcsd_new_order_email_sent', 'yes' );
 		$order->save();
 
-		// Disparar el email administrativo estándar de WooCommerce
 		if ( function_exists( 'WC' ) && WC()->mailer() ) {
 			$emails = WC()->mailer()->get_emails();
 			if ( is_array( $emails ) ) {
@@ -843,15 +838,11 @@ class FCSD_Commerce {
 			}
 		}
 
-		// Log para verificación (WooCommerce > Estado > Registros)
 		if ( function_exists( 'wc_get_logger' ) ) {
 			wc_get_logger()->info( 'FCSD: New Order email triggered for unique order ID ' . $order->get_id(), [ 'source' => 'fcsd-commerce' ] );
 		}
 	}
 
-	/**
-	 * En cambios de estado típicos (pending->processing/on-hold/completed), reintenta si procede.
-	 */
 	public function ensure_new_order_email_on_status( $order_id, $from, $to, $order ) {
 		$interesting = array( 'processing', 'on-hold', 'completed', 'pending' );
 		if ( in_array( $to, $interesting, true ) ) {
@@ -859,9 +850,6 @@ class FCSD_Commerce {
 		}
 	}
 
-	/**
-	 * ¿El pedido incluye al menos una obra única?
-	 */
 	private function order_has_unique_item( WC_Order $order ) : bool {
 		if ( 'yes' === $order->get_meta( '_fcsd_has_unique', true ) ) {
 			return true;
